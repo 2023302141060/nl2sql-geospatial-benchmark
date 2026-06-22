@@ -1,0 +1,2449 @@
+- question_id: 1
+  domain: usa
+  question: 2015 年美国哪个州的年均 PM2.5 最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.pm25_mean 
+        FROM usa_env_metrics_annual e 
+        JOIN usa_spatial_base s ON e.asdf_id = s.asdf_id 
+        WHERE e.year = 2015 
+        ORDER BY e.pm25_mean DESC 
+        LIMIT 1;
+      output_filename: highest_pm25_state_2015.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      shapeName: District of Columbia
+      pm25_mean: 9.25419333515
+
+- question_id: 2
+  domain: usa
+  question: 2012 年美国哪些州的城市建设用地占比超过了 10%？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion 
+        FROM usa_landcover_annual_proportion l 
+        JOIN usa_spatial_base s ON l.asdf_id = s.asdf_id 
+        WHERE l.year = 2012 
+          AND l.category = 'urban_and_builtup' 
+          AND l.proportion > 0.1;
+      output_filename: urban_states_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: Rhode Island
+      - shapeName: Connecticut
+      - shapeName: New Jersey
+      - shapeName: Massachusetts
+      - shapeName: District of Columbia
+
+- question_id: 3
+  domain: usa
+  question: 比较一下 2020 年加州夏季（6、7、8 月）和冬季（1、2、12 月）的平均白天地表温度。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT 
+          CASE 
+            WHEN m.month IN (6, 7, 8) THEN 'Summer' 
+            WHEN m.month IN (1, 2, 12) THEN 'Winter' 
+          END AS season, 
+          AVG(m.lst_day_mean) AS avg_temp
+        FROM usa_env_metrics_monthly_2020 m 
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id 
+        WHERE s."shapeName" = 'California' 
+          AND m.month IN (1, 2, 6, 7, 8, 12) 
+        GROUP BY 
+          CASE 
+            WHEN m.month IN (6, 7, 8) THEN 'Summer' 
+            WHEN m.month IN (1, 2, 12) THEN 'Winter' 
+          END;
+      output_filename: california_seasons_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      Summer_avg_temp: 312.4674091797
+      Winter_avg_temp: 286.6405922613
+
+- question_id: 4
+  domain: usa
+  question: 2012 年美国哪些州的农用地占比超过 20%，而且当年的 PM2.5 还低于全美平均水平？
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" 
+        FROM usa_spatial_base s 
+        JOIN usa_landcover_annual_proportion l ON s.asdf_id = l.asdf_id 
+        JOIN usa_env_metrics_annual e ON s.asdf_id = e.asdf_id 
+        WHERE l.year = 2012 
+          AND l.category = 'croplands' 
+          AND l.proportion > 0.2 
+          AND e.year = 2012 
+          AND e.pm25_mean < (
+              SELECT AVG(pm25_mean) FROM usa_env_metrics_annual WHERE year = 2012
+          );
+      output_filename: cropland_low_pm25_states.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: Minnesota
+      - shapeName: Nebraska
+      - shapeName: North Dakota
+      - shapeName: Kansas
+      - shapeName: South Dakota
+
+- question_id: 5
+  domain: usa
+  question: 算一下 2015 年美国各州平均风速和 PM2.5 之间的皮尔逊相关系数。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT st.windspeed_mean, e.pm25_mean 
+        FROM usa_static st 
+        JOIN usa_env_metrics_annual e ON st.asdf_id = e.asdf_id 
+        WHERE e.year = 2015;
+      output_filename: wind_pm25_2015.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import pearsonr
+
+    df = pd.read_json("wind_pm25_2015.json") 
+    df = df.dropna(subset=['windspeed_mean', 'pm25_mean'])
+    corr, p_value = pearsonr(df['windspeed_mean'], df['pm25_mean'])
+    print({"correlation": corr, "p_value": p_value})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      correlation: -0.4402771684407704
+
+- question_id: 6
+  domain: usa
+  question: 找出距离纽约州中心 500 公里以内的所有州，再计算这些州在 2012 年土地覆盖类型为’城市建设用地’的土地的平均比例。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT geometry AS ny_geom FROM usa_spatial_base WHERE "shapeName" = 'New York';
+      output_filename: ny_data.geojson
+      has_geometry: true
+    - sql: |
+        SELECT s."shapeName", s.geometry, l.proportion 
+        FROM usa_spatial_base s 
+        JOIN usa_landcover_annual_proportion l ON s.asdf_id = l.asdf_id 
+        WHERE l.year = 2012 AND l.category = 'urban_and_builtup';
+      output_filename: states_data.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+    from pyproj import Geod
+
+    ny_gdf = gpd.read_file("ny_data.geojson")
+    states_gdf = gpd.read_file("states_data.geojson")
+
+    # 保持 WGS84，用大地线距离：州边界任意点到纽约质心的最小距离 ≤ 500km 即纳入
+    geod = Geod(ellps='WGS84')
+    ny_centroid = ny_gdf.geometry.centroid.iloc[0]
+
+    def min_dist_km_to_boundary(geom):
+        if geom is None or geom.is_empty:
+            return float('inf')
+        if ny_centroid.within(geom):
+            return 0.0
+        coords = []
+        if geom.geom_type == 'Polygon':
+            coords = list(geom.exterior.coords)
+        elif geom.geom_type == 'MultiPolygon':
+            for p in geom.geoms:
+                coords.extend(p.exterior.coords)
+        if not coords:
+            return float('inf')
+        min_m = min(geod.inv(ny_centroid.x, ny_centroid.y, lon, lat)[2] for lon, lat in coords)
+        return min_m / 1000
+
+    states_gdf['min_dist_km'] = states_gdf.geometry.apply(min_dist_km_to_boundary)
+    intersecting_states = states_gdf[states_gdf['min_dist_km'] <= 500]
+
+    avg_proportion = intersecting_states['proportion'].mean()
+    print({"avg_urban_proportion": avg_proportion, "states_included": intersecting_states['shapeName'].tolist()})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      avg_urban_proportion: 0.11437654484730508
+      states_included:
+        - West Virginia
+        - Maryland
+        - Rhode Island
+        - New Hampshire
+        - Vermont
+        - Connecticut
+        - Delaware
+        - New Jersey
+        - Pennsylvania
+        - Ohio
+        - Maine
+        - New York
+        - Massachusetts
+        - Virginia
+        - District of Columbia
+
+- question_id: 7
+  domain: usa
+  question: 把平均坡度大于 5 的美国各州，按几何中心位置分成 3 类空间聚类。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", s.geometry, st.slope_mean 
+        FROM usa_spatial_base s 
+        JOIN usa_static st ON s.asdf_id = st.asdf_id 
+        WHERE st.slope_mean > 5;
+      output_filename: high_slope_states.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+    from sklearn.cluster import KMeans
+
+    gdf = gpd.read_file("high_slope_states.geojson")
+
+    # 提取多边形质心经纬度用于聚类
+    centroids = gdf.geometry.centroid
+    coords = list(zip(centroids.x, centroids.y))
+
+    # KMeans 聚类
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    gdf['cluster'] = kmeans.fit_predict(coords)
+
+    print(gdf[['shapeName', 'cluster']].to_dict(orient='records'))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - shapeName: Idaho
+        cluster: 2
+      - shapeName: Washington
+        cluster: 2
+      - shapeName: Hawaii
+        cluster: 0
+      - shapeName: Commonwealth of the Northern Mariana Islands
+        cluster: 1
+      - shapeName: Alaska
+        cluster: 2
+      - shapeName: American Samoa
+        cluster: 0
+
+- question_id: 8
+  domain: usa
+  question: 找出和德克萨斯州接壤的所有州，并统计它们在 2020 年上半年的 NDVI 总和。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", s.geometry, SUM(m.ndvi_mean) AS total_ndvi
+        FROM usa_spatial_base s 
+        JOIN usa_env_metrics_monthly_2020 m ON s.asdf_id = m.asdf_id 
+        WHERE m.month BETWEEN 1 AND 6
+        GROUP BY s."shapeName", s.geometry;
+      output_filename: states_ndvi.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+
+    gdf = gpd.read_file("states_ndvi.geojson")
+
+    # 获取德州的几何体
+    texas_geom = gdf[gdf['shapeName'] == 'Texas'].geometry.iloc[0]
+
+    # 使用 touches() 判断拓扑接壤
+    neighbors = gdf[gdf.geometry.touches(texas_geom)]
+
+    print({"neighbors_ndvi_sum": neighbors[['shapeName', 'total_ndvi']].to_dict('records')})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      neighbors_ndvi_sum:
+        - shapeName: Arkansas
+          total_ndvi: 29706.30473276184
+        - shapeName: Louisiana
+          total_ndvi: 24149.05242594624
+        - shapeName: New Mexico
+          total_ndvi: 14914.497097491565
+        - shapeName: Oklahoma
+          total_ndvi: 24641.858417309337
+
+- question_id: 9
+  domain: usa
+  question: 找出美国 2020 年 8 月白天地表温度超过 310K 的州，给出能把所有符合要求的州都框住的最小外接矩形坐标。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.geometry 
+        FROM usa_spatial_base s 
+        JOIN usa_env_metrics_monthly_2020 m ON s.asdf_id = m.asdf_id 
+        WHERE m.month = 8 AND m.lst_day_mean > 310;
+      output_filename: hot_states.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+
+    gdf = gpd.read_file("hot_states.geojson")
+
+    # 将所有多边形合并后求取 bounds
+    union_geom = gdf.geometry.unary_union
+    minx, miny, maxx, maxy = union_geom.bounds
+
+    print({"BoundingBox": {"minX": minx, "minY": miny, "maxX": maxx, "maxY": maxy}})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      BoundingBox:
+        minX: -124.48201686078048
+        minY: 25.837168319078447
+        maxX: -93.50804558020374
+        maxY: 45.00582173077594
+
+- question_id: 10
+  domain: zhejiang
+  question: 找出 2022 年浙江省夜间灯光最亮的那个网格 ID。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, nightlight 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022 
+        ORDER BY nightlight DESC 
+        LIMIT 1;
+      output_filename: highest_nightlight_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      cell_id: 9242
+
+- question_id: 11
+  domain: zhejiang
+  question: 统计一下 2017 年浙江省不同土地覆盖类型对应的平均降水量和平均气温。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_igbp, 
+               AVG(precipitation) AS avg_precip, 
+               AVG(temperature) AS avg_temp 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2017 
+        GROUP BY landcover_igbp;
+      output_filename: igbp_avg_precip_temp_2017.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - landcover_igbp: "Evergreen Broadleaf Forests"
+        avg_precip: 1492.124656522
+        avg_temp: 16.6101727279
+      - landcover_igbp: "Mixed Forests"
+        avg_precip: 1512.6638892382
+        avg_temp: 15.948166684
+      - landcover_igbp: "Permanent Wetlands"
+        avg_precip: 1221.4507024492
+        avg_temp: 17.5093851726
+      - landcover_igbp: "Water Bodies"
+        avg_precip: 1263.5235888882
+        avg_temp: 17.7726897174
+      - landcover_igbp: "Cropland Natural Vegetation Mosaics"
+        avg_precip: 1299.0261650371
+        avg_temp: 17.981668272
+      - landcover_igbp: "Savannas"
+        avg_precip: 1289.6494686375
+        avg_temp: 17.8044414203
+      - landcover_igbp: "Grasslands"
+        avg_precip: 1163.4558425461
+        avg_temp: 17.4657049816
+      - landcover_igbp: "Urban and Built-up Lands"
+        avg_precip: 1245.0049337356
+        avg_temp: 17.9562680772
+      - landcover_igbp: "Woody Savannas"
+        avg_precip: 1419.9769093523
+        avg_temp: 16.9155283699
+      - landcover_igbp: "Evergreen Needleleaf Forests"
+        avg_precip: 1652.5132250269
+        avg_temp: 15.2651042717
+      - landcover_igbp: "Deciduous Broadleaf Forests"
+        avg_precip: 1562.980450031
+        avg_temp: 14.0752919268
+      - landcover_igbp: "Croplands"
+        avg_precip: 1157.950450018
+        avg_temp: 17.4442360478
+
+- question_id: 12
+  domain: zhejiang
+  question: 找出 2012 到 2022 年间人口增长超过 200% 的浙江网格 ID，并列出它们 2022 年的夜间灯光强度。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d22.cell_id, d22.nightlight 
+        FROM zhejiang_fishnet_dynamic d12
+        JOIN zhejiang_fishnet_dynamic d22 ON d12.cell_id = d22.cell_id 
+        WHERE d12.year = 2012 
+          AND d22.year = 2022 
+          AND d12.population > 0
+          AND (d22.population - d12.population)::float / d12.population > 2;
+      output_filename: pop_growth_grids.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - cell_id: 814
+        nightlight: 0.3151887968
+      - cell_id: 3178
+        nightlight: 0.814766239
+      - cell_id: 6099
+        nightlight: 1.1327082115
+      - cell_id: 7839
+        nightlight: 0.6708077644
+      - cell_id: 9099
+        nightlight: 0.4206770079
+      - cell_id: 9226
+        nightlight: 14.3136928847
+      - cell_id: 9290
+        nightlight: 0.8514614735
+      - cell_id: 9422
+        nightlight: 10.0947312932
+      - cell_id: 9620
+        nightlight: 0.5269948972
+      - cell_id: 9679
+        nightlight: 0.7361961949
+
+- question_id: 13
+  domain: zhejiang
+  question: 2022 年浙江省哪些网格的 NDVI 比全省平均值高出 20% 以上，而且海拔低于 100？
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d.cell_id 
+        FROM zhejiang_fishnet_dynamic d
+        JOIN zhejiang_fishnet_static s ON d.cell_id = s.cell_id
+        WHERE d.year = 2022 
+          AND s.dem < 100 
+          AND d.ndvi > (
+              SELECT AVG(ndvi) FROM zhejiang_fishnet_dynamic WHERE year = 2022
+          ) * 1.2;
+      output_filename: high_ndvi_low_dem.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - cell_id: 2874
+      - cell_id: 3337
+      - cell_id: 3913
+      - cell_id: 8448
+
+- question_id: 14
+  domain: zhejiang
+  question: 算一下 2022 年浙江省各网格夜间灯光强度和叶面积指数之间的皮尔逊相关系数。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT nightlight, lai 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022;
+      output_filename: sql_result.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import pearsonr
+
+    df = pd.read_json("sql_result.json")
+    df = df.dropna(subset=['nightlight', 'lai'])
+    corr, p_value = pearsonr(df['nightlight'], df['lai'])
+    print({"correlation": corr, "p_value": p_value})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      correlation: -0.4583387635774906
+
+- question_id: 15
+  domain: zhejiang
+  question: 算出完全落在杭州市范围内的所有渔网格在 2017 年的人口总数。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT geometry AS city_geom FROM zhejiang_city WHERE fullname = '杭州市';
+      output_filename: hangzhou_city.geojson
+      has_geometry: true
+    - sql: |
+        SELECT f.cell_id, f.geometry, d.population 
+        FROM zhejiang_fishnet f 
+        JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
+        WHERE d.year = 2017;
+      output_filename: fishnet_2017.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+
+    city_gdf = gpd.read_file("hangzhou_city.geojson")
+    fishnet_gdf = gpd.read_file("fishnet_2017.geojson")
+
+    # 提取杭州市的 Polygon
+    hangzhou_polygon = city_gdf.geometry.iloc[0]
+
+    # 判断网格是否在杭州市内 (within)
+    inside_grids = fishnet_gdf[fishnet_gdf.geometry.within(hangzhou_polygon)]
+    total_pop = inside_grids['population'].sum()
+
+    print({"hangzhou_total_population_2017": total_pop})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      hangzhou_total_population_2017: 8174351
+
+- question_id: 16
+  domain: zhejiang
+  question: 把 2022 年浙江省 [`era5_temp`](benchmark/dev_plus.yaml:545) 高于 18.9 的高温网格，按几何中心位置分成 4 个热点聚类。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT f.cell_id, f.geometry, d.era5_temp 
+        FROM zhejiang_fishnet f 
+        JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
+        WHERE d.year = 2022 AND d.era5_temp > 18.9;
+      output_filename: high_temp_grids.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+    from sklearn.cluster import KMeans
+
+    gdf = gpd.read_file("high_temp_grids.geojson")
+
+    # 提取网格质心用于聚类
+    centroids = gdf.geometry.centroid
+    coords = list(zip(centroids.x, centroids.y))
+
+    # K-Means 聚类
+    kmeans = KMeans(n_clusters=4, random_state=42)
+    gdf['cluster'] = kmeans.fit_predict(coords)
+
+    print(gdf[['cell_id', 'cluster']].to_dict(orient='records'))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - cell_id: 795
+        cluster: 2
+      - cell_id: 796
+        cluster: 2
+      - cell_id: 797
+        cluster: 2
+      - cell_id: 874
+        cluster: 0
+      - cell_id: 875
+        cluster: 0
+      - cell_id: 876
+        cluster: 0
+      - cell_id: 957
+        cluster: 0
+      - cell_id: 958
+        cluster: 3
+      - cell_id: 959
+        cluster: 3
+      - cell_id: 1042
+        cluster: 1
+      - cell_id: 1043
+        cluster: 3
+      - cell_id: 1132
+        cluster: 1
+      - cell_id: 1133
+        cluster: 1
+
+- question_id: 17
+  domain: zhejiang
+  question: 找出位于宁波市外侧 10 公里范围内、但不在宁波市行政区内的渔网格，并算出这些网格 2012 年的平均降水量。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT geometry FROM zhejiang_city WHERE "fullname" = '宁波市';
+      output_filename: ningbo_city.geojson
+      has_geometry: true
+    - sql: |
+        SELECT f.cell_id, f.geometry, d.precipitation 
+        FROM zhejiang_fishnet f 
+        JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
+        WHERE d.year = 2012;
+      output_filename: all_fishnet_2012.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+
+    ningbo_gdf = gpd.read_file("ningbo_city.geojson")
+    grids_gdf = gpd.read_file("all_fishnet_2012.geojson")
+
+    # 1. 投影为平面坐标系 (如 EPSG:3857) 以米为单位计算距离
+    ningbo_gdf = ningbo_gdf.to_crs(epsg=3857)
+    grids_gdf = grids_gdf.to_crs(epsg=3857)
+
+    # 2. 拓扑修复 (防崩溃与边界修正)
+    ningbo_gdf.geometry = ningbo_gdf.geometry.make_valid()
+    grids_gdf.geometry = grids_gdf.geometry.make_valid()
+
+    ningbo_geom = ningbo_gdf.geometry.iloc[0]
+    
+    # 3. 构建 10 公里缓冲区并抠除宁波市自身，提取纯环状区域
+    buffer_10km = ningbo_geom.buffer(10000)
+    ring_area = buffer_10km.difference(ningbo_geom)
+
+    # 4. 空间相交判断与缺失值清洗
+    target_grids = grids_gdf[grids_gdf.geometry.intersects(ring_area)]
+    avg_precip = target_grids['precipitation'].dropna().mean()
+
+    # 5. 标准化输出（ensure_ascii=False 避免中文乱码）
+    print(json.dumps({
+        "status": "ok",
+        "data_payload": {
+            "avg_precipitation_in_10km_ring": avg_precip,
+            "num_grid_cells": len(target_grids)
+        }
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      avg_precipitation_in_10km_ring: 1642.617035333603
+
+- question_id: 18
+  domain: zhejiang
+  question: 找出 2012 到 2022 年间浙江省土地覆盖类型发生变化的所有渔网格，并计算这些网格变化后的总实际面积。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT 
+            cell_id, 
+            geometry, 
+            area_ratio 
+        FROM zhejiang_fishnet
+        WHERE geometry IS NOT NULL;
+      output_filename: zhejiang_fishnet_base.geojson
+      has_geometry: true
+    - sql: |
+        SELECT 
+            cell_id, 
+            landcover_igbp 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2012 AND landcover_igbp IS NOT NULL;
+      output_filename: landcover_2012.json
+      has_geometry: false
+    - sql: |
+        SELECT 
+            cell_id, 
+            landcover_igbp 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022 AND landcover_igbp IS NOT NULL;
+      output_filename: landcover_2022.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    import pandas as pd
+    import traceback
+
+    try:
+        # 1. 读取基础渔网格空间数据
+        grid_gdf = gpd.read_file("zhejiang_fishnet_base.geojson")
+
+        # 2. 分别读取 2012 和 2022 年的土地覆盖属性数据
+        df_2012 = pd.read_json("landcover_2012.json", orient="records")
+        df_2022 = pd.read_json("landcover_2022.json", orient="records")
+
+        # 3. 按 cell_id 关联起止年份数据，并寻找真正发生变迁的网格 (2012 != 2022)
+        df_merged = df_2012.merge(df_2022, on="cell_id", suffixes=('_2012', '_2022'))
+        df_changed = df_merged[df_merged["landcover_igbp_2012"] != df_merged["landcover_igbp_2022"]]
+
+        if df_changed.empty:
+            total_area_km2 = 0.0
+        else:
+            # 4. 将发生变化的属性结果与空间底图关联
+            changed_gdf = grid_gdf.merge(df_changed, on="cell_id")
+
+            # 5. 【关键】投影到米制平面坐标系(EPSG:3857)以计算实际面积
+            changed_gdf = changed_gdf.to_crs(epsg=3857)
+
+            # 6. 【关键】计算实际物理面积：网格几何面积 * 面积边缘折算权重(area_ratio)
+            changed_gdf["actual_area_m2"] = changed_gdf.geometry.area * changed_gdf["area_ratio"]
+
+            # 7. 汇总总面积并转换为平方千米
+            total_area_km2 = changed_gdf["actual_area_m2"].sum() / 1e6
+
+        # 8. 输出符合协议的 JSON
+        print(json.dumps({
+            "status": "ok",
+            "answer_text": f"2012年至2022年期间，浙江省土地覆盖类型发生变迁的总实际面积约为 {total_area_km2:.2f} 平方千米。",
+            "data_payload": {
+                "total_changed_area_km2": float(total_area_km2)
+            }
+        }, ensure_ascii=False))
+
+    except Exception as e:
+        err_msg = str(e) + "\n" + traceback.format_exc()
+        print(json.dumps({
+            "status": "error",
+            "answer_text": err_msg,
+            "data_payload": {}
+        }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      total_changed_area_km2: 23173.770437829433
+
+- question_id: 19
+  domain: usa
+  question: 美国哪个州的太阳能光伏发电潜力最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" 
+        FROM usa_spatial_base s 
+        JOIN usa_static st ON s.asdf_id = st.asdf_id 
+        ORDER BY st.pvout_mean DESC 
+        LIMIT 1;
+      output_filename: highest_pvout_state.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: New Mexico
+
+- question_id: 20
+  domain: usa
+  question: 德克萨斯州 2014 年的平均气温是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT e.air_temp_mean 
+        FROM usa_env_metrics_annual e 
+        JOIN usa_spatial_base s ON e.asdf_id = s.asdf_id 
+        WHERE s."shapeName" = 'Texas' AND e.year = 2014;
+      output_filename: texas_air_temp_2014.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - air_temp_mean: 18.01597827590389
+
+- question_id: 21
+  domain: usa
+  question: 找出美国 2020 年 1 月夜间平均地表温度低于 250K 的所有州。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" 
+        FROM usa_spatial_base s 
+        JOIN usa_env_metrics_monthly_2020 m ON s.asdf_id = m.asdf_id 
+        WHERE m.year = 2020 AND m.month = 1 AND m.lst_night_mean < 250;
+      output_filename: jan_2020_freezing_nights.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: Alaska
+
+- question_id: 22
+  domain: usa
+  question: 拿到 2020 年美国各州每个月的白天地表平均温度后，用 Python 算出哪个州全年月度温度波动最大，以及对应的波动值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.month, m.lst_day_mean 
+        FROM usa_env_metrics_monthly_2020 m 
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id 
+        WHERE m.year = 2020 
+        ORDER BY s."shapeName", m.month;
+      output_filename: lst_day_monthly_2020.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    
+    df = pd.read_json("lst_day_monthly_2020.json")
+    df = df.sort_values(by=['shapeName', 'month'])
+    # 计算每个州相邻月份的温差绝对值
+    df['temp_fluctuation'] = df.groupby('shapeName')['lst_day_mean'].diff().abs()
+    # 聚合求各州全年的平均波动幅度
+    mean_fluctuation = df.groupby('shapeName')['temp_fluctuation'].mean()
+    
+    max_state = mean_fluctuation.idxmax()
+    max_val = mean_fluctuation.max()
+    print({"state_with_max_fluctuation": max_state, "mean_abs_fluctuation": max_val})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      state_with_max_fluctuation: Nevada
+      mean_abs_fluctuation: 7.699868324727277
+
+- question_id: 23
+  domain: usa
+  question: 找出美国从 2010 到 2011、再从 2011 到 2012，人口连续两年下降的州。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" 
+        FROM usa_spatial_base s 
+        JOIN usa_env_metrics_annual e10 ON s.asdf_id = e10.asdf_id AND e10.year = 2010 
+        JOIN usa_env_metrics_annual e11 ON s.asdf_id = e11.asdf_id AND e11.year = 2011 
+        JOIN usa_env_metrics_annual e12 ON s.asdf_id = e12.asdf_id AND e12.year = 2012 
+        WHERE e11.pop_sum < e10.pop_sum AND e12.pop_sum < e11.pop_sum;
+      output_filename: continuous_pop_decrease_states.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: Hawaii
+      - shapeName: United States Virgin Islands
+      - shapeName: Commonwealth of the Northern Mariana Islands
+      - shapeName: Alaska
+      - shapeName: American Samoa
+      - shapeName: Michigan
+      - shapeName: Puerto Rico
+
+- question_id: 24
+  domain: usa
+  question: 2012 年美国稀树草原占比最高的 5 个州是哪些？顺便列出它们当年的平均 NDVI。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.ndvi_mean 
+        FROM usa_spatial_base s 
+        JOIN usa_landcover_annual_proportion l ON s.asdf_id = l.asdf_id 
+        JOIN usa_env_metrics_annual e ON s.asdf_id = e.asdf_id 
+        WHERE l.year = 2012 AND e.year = 2012 AND l.category = 'savannas' 
+        ORDER BY l.proportion DESC 
+        LIMIT 5;
+      output_filename: top_savannas_ndvi_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: California
+        ndvi_mean: 4049.41574978
+      - shapeName: Texas
+        ndvi_mean: 4057.22830698
+      - shapeName: Alaska
+        ndvi_mean: 3682.29418773
+      - shapeName: District of Columbia
+        ndvi_mean: 4641.89669152
+      - shapeName: Delaware
+        ndvi_mean: 4347.50122363
+
+- question_id: 25
+  domain: usa
+  question: 查一下 2020 年 7 月美国哪个州白天和夜间地表平均温度差最大，以及这个温差是多少。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", (m.lst_day_mean - m.lst_night_mean) as temp_diff 
+        FROM usa_spatial_base s 
+        JOIN usa_env_metrics_monthly_2020 m ON s.asdf_id = m.asdf_id 
+        WHERE m.year = 2020 AND m.month = 7 
+        ORDER BY temp_diff DESC 
+        LIMIT 1;
+      output_filename: max_temp_diff_jul_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - shapeName: Nevada
+        temp_diff: 29.626989345
+
+- question_id: 26
+  domain: usa
+  question: 提取 2011 年美国各州农用地占比和平均 NDVI，用 Python 做一个一元线性回归，并输出斜率和截距。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT l.proportion as croplands_prop, e.ndvi_mean 
+        FROM usa_landcover_annual_proportion l 
+        JOIN usa_env_metrics_annual e ON l.asdf_id = e.asdf_id 
+        WHERE l.year = 2011 AND e.year = 2011 AND l.category = 'croplands';
+      output_filename: croplands_ndvi_corr_2011.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import linregress
+
+    df = pd.read_json("croplands_ndvi_corr_2011.json") 
+    df = df.dropna(subset=['croplands_prop', 'ndvi_mean'])
+    
+    res = linregress(df['croplands_prop'], df['ndvi_mean'])
+    print({"slope": res.slope, "intercept": res.intercept})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      slope: 929.8230071450228
+      intercept: 4393.969853881012
+
+- question_id: 27
+  domain: usa
+  question: 取出加州 2020 年每个月的夜间地表温度，用 Python 做 Shapiro-Wilk 正态性检验，输出 W 统计量和 P 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT m.month, m.lst_night_mean 
+        FROM usa_env_metrics_monthly_2020 m 
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id 
+        WHERE s."shapeName" = 'California' AND m.year = 2020 
+        ORDER BY m.month;
+      output_filename: cali_lst_night_2020.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import shapiro
+
+    df = pd.read_json("cali_lst_night_2020.json") 
+    df = df.dropna(subset=['lst_night_mean'])
+    
+    stat, p = shapiro(df['lst_night_mean'])
+    print({"shapiro_w_statistic": stat, "p_value": p})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapiro_w_statistic: 0.9033590471911007
+      p_value: 0.1752616940329088
+
+- question_id: 28
+  domain: usa
+  question: 拿到 2020 年美国各州 12 个月的 PM2.5 均值后，用 Python 算各州的变异系数，并找出月度波动最明显的 3 个州。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.pm25_mean 
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020;
+      output_filename: monthly_pm25_2020.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    
+    df = pd.read_json("monthly_pm25_2020.json")
+    stats = df.groupby('shapeName')['pm25_mean'].agg(['mean', 'std'])
+    stats['cv'] = stats['std'] / stats['mean']
+    top_3 = stats.sort_values(by='cv', ascending=False).head(3)
+    print(top_3['cv'].to_dict())
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      Oregon: 0.8856630564667088
+      Washington: 0.774250645587419
+      California: 0.6830633676299022
+
+- question_id: 29
+  domain: usa
+  question: 提取 2015 年美国各州的平均风速和平均气温，用 Python 做 Z-Score 标准化，再列出加州标准化后的两个数值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.windspeed_mean, e.air_temp_mean
+        FROM usa_spatial_base s
+        JOIN usa_static st ON s.asdf_id = st.asdf_id
+        JOIN usa_env_metrics_annual e ON s.asdf_id = e.asdf_id
+        WHERE e.year = 2015;
+      output_filename: wind_temp_2015.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    
+    df = pd.read_json("wind_temp_2015.json")
+    scaler = StandardScaler()
+    df[['wind_z', 'temp_z']] = scaler.fit_transform(df[['windspeed_mean', 'air_temp_mean']])
+    cali_data = df[df['shapeName'] == 'California'][['wind_z', 'temp_z']].iloc[0]
+    print(cali_data.to_dict())
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      wind_z: -1.209006934564123
+      temp_z: 0.611512614742866
+
+- question_id: 30
+  domain: usa
+  question: 提取 2012 年美国各州的混合森林占比和 PM2.5 均值，用 Python 按 1.5 倍 IQR 规则找出森林占比特别高或 PM2.5 特别高的州。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion as forest_prop, e.pm25_mean
+        FROM usa_landcover_annual_proportion l
+        JOIN usa_env_metrics_annual e ON l.asdf_id = e.asdf_id
+        JOIN usa_spatial_base s ON l.asdf_id = s.asdf_id
+        WHERE l.year = 2012 AND e.year = 2012 AND l.category = 'mixed_forest';
+      output_filename: forest_pm25_2012.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+
+    df = pd.read_json("forest_pm25_2012.json")
+
+    def get_outliers(series):
+        Q1 = series.quantile(0.25)
+        Q3 = series.quantile(0.75)
+        IQR = Q3 - Q1
+        return (series > (Q3 + 1.5 * IQR))
+
+    df['forest_outlier'] = get_outliers(df['forest_prop'])
+    df['pm25_outlier'] = get_outliers(df['pm25_mean'])
+
+    result = df[df['forest_outlier'] | df['pm25_outlier']]['shapeName'].tolist()
+    print({"outlier_states": result})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      outlier_states: ['New Hampshire', 'Maine']
+
+- question_id: 31
+  domain: usa
+  question: 提取 2020 年华盛顿州和俄勒冈州每个月的平均 NDVI，用 Python 做独立样本 T 检验，看看两州绿化水平有没有明显差异，并输出 t 值和 p 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.month, m.ndvi_mean
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE s."shapeName" IN ('Washington', 'Oregon') AND m.year = 2020;
+      output_filename: ndvi_t_test.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import ttest_ind
+    
+    df = pd.read_json("ndvi_t_test.json")
+    wa = df[df['shapeName'] == 'Washington']['ndvi_mean']
+    or_ = df[df['shapeName'] == 'Oregon']['ndvi_mean']
+    
+    t_stat, p_val = ttest_ind(wa, or_)
+    print({"t_statistic": t_stat, "p_value": p_val})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      t_statistic: -0.4616830305395465
+      p_value: 0.6488412902160442
+
+- question_id: 32
+  domain: usa
+  question: 取出美国所有州 2020 年 12 个月的夜间灯光强度，用 Python 做 K-Means 聚类，分成 3 类，并输出每一类有多少个州。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.month, m.ntl_mean
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020;
+      output_filename: monthly_ntl_2020.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from sklearn.cluster import KMeans
+    
+    df = pd.read_json("monthly_ntl_2020.json")
+    pivot_df = df.pivot(index='shapeName', columns='month', values='ntl_mean').dropna()
+    
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    pivot_df['cluster'] = kmeans.fit_predict(pivot_df)
+    
+    counts = pivot_df['cluster'].value_counts().to_dict()
+    print({"cluster_counts": counts})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cluster_counts: {0: 47, 2: 8, 1: 1}
+
+- question_id: 33
+  domain: zhejiang
+  question: 查一下杭州市的行政区划代码。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT code 
+        FROM zhejiang_city 
+        WHERE fullname = '杭州市';
+      output_filename: hangzhou_code.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - code: "330100"
+
+- question_id: 34
+  domain: zhejiang
+  question: 找出浙江省范围内海拔最高的网格单元 ID。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id 
+        FROM zhejiang_fishnet_static 
+        ORDER BY dem DESC 
+        LIMIT 1;
+      output_filename: highest_dem_cell.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - cell_id: 1874
+
+- question_id: 35
+  domain: zhejiang
+  question: 找出 2022 年浙江省里土地覆盖类型为农用地、且降水量大于 1500 毫米的前 3 个网格 ID，按降水量从高到低排。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, precipitation 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022 AND landcover_igbp = 'Croplands' AND precipitation > 1500 
+        ORDER BY precipitation DESC 
+        LIMIT 3;
+      output_filename: high_precip_croplands_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - cell_id: 338
+      - cell_id: 388
+      - cell_id: 8923
+
+- question_id: 36
+  domain: zhejiang
+  question: 统计一下浙江省内坡度大于 25 且坡向在 90 到 180 之间的网格一共有多少个。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(cell_id) as grid_count 
+        FROM zhejiang_fishnet_static 
+        WHERE slope > 25 AND aspect >= 90 AND aspect <= 180;
+      output_filename: steep_south_facing_count.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - grid_count: 830
+
+- question_id: 37
+  domain: zhejiang
+  question: 查一下 2017 年浙江省 NDVI 排名前 5 的网格 ID 及其 NDVI。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, ndvi 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2017 AND ndvi IS NOT NULL 
+        ORDER BY ndvi DESC 
+        LIMIT 5;
+      output_filename: top_ndvi_2017.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - cell_id: 1215
+        ndvi: 0.8213444137
+      - cell_id: 1028
+        ndvi: 0.8175266094
+      - cell_id: 6166
+        ndvi: 0.8161468465
+      - cell_id: 2905
+        ndvi: 0.816134094
+      - cell_id: 3829
+        ndvi: 0.8159227661
+
+- question_id: 38
+  domain: zhejiang
+  question: 找出浙江省从 2012 到 2017、再从 2017 到 2022，人口连续两个阶段都在增长的网格总数。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(d12.cell_id) 
+        FROM zhejiang_fishnet_dynamic d12 
+        JOIN zhejiang_fishnet_dynamic d17 ON d12.cell_id = d17.cell_id AND d17.year = 2017 
+        JOIN zhejiang_fishnet_dynamic d22 ON d12.cell_id = d22.cell_id AND d22.year = 2022 
+        WHERE d12.year = 2012 AND d17.population > d12.population AND d22.population > d17.population;
+      output_filename: continuous_pop_growth_count.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - count: 5053
+
+- question_id: 39
+  domain: zhejiang
+  question: 找出浙江省里 2012 年还是农用地、到 2022 年变成城市建设用地的网格一共有多少个。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(d12.cell_id) 
+        FROM zhejiang_fishnet_dynamic d12 
+        JOIN zhejiang_fishnet_dynamic d22 ON d12.cell_id = d22.cell_id 
+        WHERE d12.year = 2012 AND d12.landcover_igbp = 'Croplands' 
+          AND d22.year = 2022 AND d22.landcover_igbp = 'Urban and Built-up Lands';
+      output_filename: urbanization_cells_count.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - count: 52
+
+- question_id: 40
+  domain: zhejiang
+  question: 结合动态表和静态表，统计浙江省 2022 年各类土地覆盖对应的平均海拔，并按平均海拔从高到低排序。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d.landcover_igbp, AVG(s.dem) as avg_dem 
+        FROM zhejiang_fishnet_dynamic d 
+        JOIN zhejiang_fishnet_static s ON d.cell_id = s.cell_id 
+        WHERE d.year = 2022 
+        GROUP BY d.landcover_igbp 
+        ORDER BY avg_dem DESC;
+      output_filename: avg_dem_by_landcover.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - landcover_igbp: "Deciduous Broadleaf Forests"
+        avg_dem: 865.76
+      - landcover_igbp: "Evergreen Needleleaf Forests"
+        avg_dem: 817.79
+      - landcover_igbp: "Mixed Forests"
+        avg_dem: 608.46
+      - landcover_igbp: "Evergreen Broadleaf Forests"
+        avg_dem: 510.98
+      - landcover_igbp: "Woody Savannas"
+        avg_dem: 350.92
+      - landcover_igbp: "Savannas"
+        avg_dem: 87.63
+      - landcover_igbp: "Cropland Natural Vegetation Mosaics"
+        avg_dem: 71.85
+      - landcover_igbp: "Permanent Wetlands"
+        avg_dem: 31.60
+      - landcover_igbp: "Urban and Built-up Lands"
+        avg_dem: 20.72
+      - landcover_igbp: "Grasslands"
+        avg_dem: 14.06
+      - landcover_igbp: "Croplands"
+        avg_dem: 11.69
+      - landcover_igbp: "Water Bodies"
+        avg_dem: 8.34
+
+- question_id: 41
+  domain: zhejiang
+  question: 结合城市边界和渔网数据，算出完全或部分位于温州市范围内的网格在 2022 年的平均降水量。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT AVG(d.precipitation) as avg_precip 
+        FROM zhejiang_city c 
+        JOIN zhejiang_fishnet f ON ST_Intersects(c.geometry, f.geometry) 
+        JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
+        WHERE c.fullname = '温州市' AND d.year = 2022;
+      output_filename: wenzhou_avg_precip_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - avg_precip: 1479.0147441645
+
+- question_id: 42
+  domain: zhejiang
+  question: 取出 2017 年浙江省各网格的海拔和气温，用 Python 做 Z-Score 标准化，再找出标准化后气温最高的前 2 个网格 ID 及其数值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.cell_id, s.dem, d.era5_temp 
+        FROM zhejiang_fishnet_static s 
+        JOIN zhejiang_fishnet_dynamic d ON s.cell_id = d.cell_id 
+        WHERE d.year = 2017;
+      output_filename: dem_temp_2017.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    
+    df = pd.read_json("dem_temp_2017.json").dropna()
+    scaler = StandardScaler()
+    df[['dem_z', 'temp_z']] = scaler.fit_transform(df[['dem', 'era5_temp']])
+    
+    top_2 = df.sort_values(by='temp_z', ascending=False).head(2)
+    result = top_2[['cell_id', 'temp_z']].to_dict(orient='records')
+    print({"top_2_hottest_z_scores": result})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_2_hottest_z_scores: 
+        - cell_id: 6509
+          temp_z: 2.392178174790611
+        - cell_id: 6386
+          temp_z: 2.392178174790611
+
+- question_id: 43
+  domain: zhejiang
+  question: 提取浙江省 2022 年所有网格的 NDVI 和降水量，用 Python 算它们的皮尔逊相关系数和 P 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT ndvi, precipitation 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022 AND ndvi IS NOT NULL AND precipitation IS NOT NULL;
+      output_filename: ndvi_precip_2022.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import pearsonr
+    
+    df = pd.read_json("ndvi_precip_2022.json")
+    corr, p_val = pearsonr(df['ndvi'], df['precipitation']) 
+    print({"pearson_correlation": corr, "p_value": p_val})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      pearson_correlation: 0.41718415633746214
+      p_value: 0.0
+
+- question_id: 44
+  domain: zhejiang
+  question: 提取 2022 年浙江省所有网格的夜间灯光数据，用 Python 按 1.5 倍 IQR 规则找出异常高值，并统计这样的网格有多少个。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, nightlight 
+        FROM zhejiang_fishnet_dynamic 
+        WHERE year = 2022 AND nightlight IS NOT NULL;
+      output_filename: light_2022.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    
+    df = pd.read_json("light_2022.json")
+    Q1 = df['nightlight'].quantile(0.25)
+    Q3 = df['nightlight'].quantile(0.75)
+    IQR = Q3 - Q1
+    
+    upper_bound = Q3 + 1.5 * IQR
+    outliers = df[df['nightlight'] > upper_bound]
+    
+    print({"extreme_bright_grids_count": len(outliers)})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      extreme_bright_grids_count: 1277
+
+- question_id: 45
+  domain: zhejiang
+  question: 提取浙江省海拔最高的前 100 个网格在 2012、2017、2022 年的 NDVI 和气温数据，用 Python 分别算每个网格的变化趋势，再算这 100 个网格里植被趋势和气温趋势之间的皮尔逊相关系数。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH TopDem AS (
+            SELECT cell_id 
+            FROM zhejiang_fishnet_static 
+            ORDER BY dem DESC 
+            LIMIT 100
+        )
+        SELECT t.cell_id, d.year, d.ndvi, d.temperature 
+        FROM TopDem t 
+        JOIN zhejiang_fishnet_dynamic d ON t.cell_id = d.cell_id 
+        WHERE d.year IN (2012, 2017, 2022) 
+          AND d.ndvi IS NOT NULL 
+          AND d.temperature IS NOT NULL;
+      output_filename: top100_dem_time_series.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from scipy.stats import linregress, pearsonr
+
+    df = pd.read_json("top100_dem_time_series.json")
+    
+    trends = []
+    for cell_id, group in df.groupby('cell_id'):
+        if len(group) == 3:
+            group = group.sort_values('year')
+            ndvi_slope = linregress(group['year'], group['ndvi']).slope
+            temp_slope = linregress(group['year'], group['temperature']).slope
+            trends.append({'ndvi_slope': ndvi_slope, 'temp_slope': temp_slope})
+            
+    trends_df = pd.DataFrame(trends)
+    corr, p_val = pearsonr(trends_df['ndvi_slope'], trends_df['temp_slope'])
+    print({"trend_correlation": corr, "p_value": p_val})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      trend_correlation: 0.266
+
+- question_id: 46
+  domain: usa
+  question: 提取美国各州 2012 年的 PM2.5、总人口、光伏潜力、平均风速、平均坡度和城市建设用地占比，用 Python 建一个多元线性回归模型，输出 R-squared 和对 PM2.5 影响最大的特征。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT 
+            e.asdf_id, 
+            e.pm25_mean, 
+            e.pop_sum, 
+            s.pvout_mean, 
+            s.windspeed_mean, 
+            s.slope_mean, 
+            l.proportion AS urban_prop 
+        FROM usa_env_metrics_annual e 
+        JOIN usa_static s ON e.asdf_id = s.asdf_id 
+        JOIN usa_landcover_annual_proportion l ON e.asdf_id = l.asdf_id 
+        WHERE e.year = 2012 
+          AND l.year = 2012 
+          AND l.category = 'urban_and_builtup';
+      output_filename: usa_multivariate_2012.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score
+    import numpy as np
+
+    df = pd.read_json("usa_multivariate_2012.json").dropna()
+    features = ['pop_sum', 'pvout_mean', 'windspeed_mean', 'slope_mean', 'urban_prop']
+    X = df[features]
+    y = df['pm25_mean']
+
+    model = LinearRegression()
+    model.fit(X, y)
+    r2 = r2_score(y, model.predict(X))
+    
+    # 找出影响最大的特征 (系数绝对值最大)
+    max_coef_idx = np.argmax(np.abs(model.coef_))
+    most_important_feature = features[max_coef_idx]
+
+    print({"r_squared": r2, "most_important_feature": most_important_feature})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      r_squared: 0.616
+      most_important_feature: "urban_prop"
+
+- question_id: 47
+  domain: zhejiang
+  question: 找出完全或部分位于杭州市内的所有渔网格，取出它们 2012 年和 2022 年的气温、夜间灯光数据。用 Python 计算每个网格 10 年间的热岛强度变化和夜间灯光变化，再输出热岛强度增长最快的网格 ID，以及两者的相关系数。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT 
+          f.cell_id,
+          f.geometry,
+          d2012.temperature AS temperature_2012,
+          d2012.nightlight AS nightlight_2012,
+          d2022.temperature AS temperature_2022,
+          d2022.nightlight AS nightlight_2022
+        FROM zhejiang_fishnet f
+        JOIN zhejiang_fishnet_dynamic d2012 
+          ON f.cell_id = d2012.cell_id AND d2012.year = 2012
+        JOIN zhejiang_fishnet_dynamic d2022 
+          ON f.cell_id = d2022.cell_id AND d2022.year = 2022
+        JOIN zhejiang_city c 
+          ON ST_Intersects(f.geometry, c.geometry)
+        WHERE c.fullname = '杭州市';
+      output_filename: hangzhou_fishnet_uh_2012_2022.geojson
+      has_geometry: true
+  expected_python_code: |
+    import geopandas as gpd
+    import pandas as pd
+    from scipy.stats import pearsonr
+
+    # 读取 GeoJSON（SQL 已通过 ST_Intersects 过滤杭州市范围内网格）
+    gdf = gpd.read_file("hangzhou_fishnet_uh_2012_2022.geojson")
+
+    # 如果意外包含 city_geometry 列（兼容旧导出），再做一次筛选
+    if "city_geometry" in gdf.columns:
+        city_geom = gdf["city_geometry"].iloc[0]
+        gdf = gdf[gdf.geometry.intersects(city_geom)].copy()
+        gdf = gdf.drop(columns=["city_geometry"])
+
+    if gdf.empty:
+        raise ValueError("No grids intersect with Hangzhou city boundary.")
+
+    # 转换为长格式，便于后续计算
+    df = pd.melt(
+        gdf, 
+        id_vars=['cell_id'], 
+        value_vars=['temperature_2012', 'nightlight_2012', 'temperature_2022', 'nightlight_2022'],
+        var_name='var_year', 
+        value_name='value'
+    )
+    df[['variable', 'year']] = df['var_year'].str.rsplit('_', n=1, expand=True)
+    df = df.drop(columns=['var_year'])
+    df['year'] = df['year'].astype(int)
+
+    # 透视回宽格式
+    df = df.pivot(index=['cell_id', 'year'], columns='variable', values='value').reset_index()
+
+    # 计算当年全市（杭州市内筛选网格）平均温度
+    yearly_mean_temp = df.groupby('year')['temperature'].transform('mean')
+    df['HII'] = df['temperature'] - yearly_mean_temp
+
+    # 计算变化量
+    pivot_df = df.pivot(index='cell_id', columns='year', values=['HII', 'nightlight']).dropna()
+
+    delta_HII = pivot_df[('HII', 2022)] - pivot_df[('HII', 2012)]
+    delta_NTL = pivot_df[('nightlight', 2022)] - pivot_df[('nightlight', 2012)]
+
+    # 最终输出
+    max_delta_hii_cell_id = int(delta_HII.idxmax())
+    corr, _ = pearsonr(delta_HII, delta_NTL)
+
+    print({
+        "max_delta_hii_cell_id": max_delta_hii_cell_id,
+        "hii_ntl_correlation": float(corr)
+    })
+
+    # 调试信息（便于验证）
+    print({
+        "total_grids_in_hangzhou": len(pivot_df),
+        "mean_delta_HII": float(delta_HII.mean()),
+        "std_delta_HII": float(delta_HII.std())
+    })
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      max_delta_hii_cell_id: 1812
+      hii_ntl_correlation: 0.182
+
+- question_id: 48
+  domain: usa
+  question: 提取美国 2010 年各空间单元的人口和太阳能光伏发电潜力数据，去掉空值后，用 Python 分别计算这两项的基尼系数。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT e.pop_sum, s.pvout_mean 
+        FROM usa_env_metrics_annual e 
+        JOIN usa_static s ON e.asdf_id = s.asdf_id 
+        WHERE e.year = 2010 
+          AND e.pop_sum IS NOT NULL 
+          AND s.pvout_mean IS NOT NULL;
+      output_filename: usa_gini_2010.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+    import numpy as np
+
+    def gini(array):
+        array = np.array(array, dtype=np.float64)
+        array = array.flatten()
+        if np.amin(array) < 0:
+            array -= np.amin(array)
+        array += 0.0000001
+        array = np.sort(array)
+        index = np.arange(1, array.shape[0] + 1)
+        n = array.shape[0]
+        return ((np.sum((2 * index - n  - 1) * array)) / (n * np.sum(array)))
+
+    df = pd.read_json("usa_gini_2010.json")
+    
+    pop_gini = gini(df['pop_sum'].values)
+    pvout_gini = gini(df['pvout_mean'].values)
+    
+    print({"population_gini": pop_gini, "solar_potential_gini": pvout_gini})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      population_gini: 0.541
+      solar_potential_gini: 0.0573
+
+- question_id: 49
+  domain: zhejiang
+  question: 筛选出 ESA 土地覆盖类型为 Tree cover 的网格，提取它们在 2012、2017、2022 年的 NDVI 和降水量，用 Python 计算生态恢复力指数，并输出指数最高的 3 个网格 ID。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d.cell_id, d.ndvi, d.precipitation 
+        FROM zhejiang_fishnet_dynamic d 
+        JOIN zhejiang_fishnet_static s ON d.cell_id = s.cell_id 
+        WHERE s.landcover_esa = 'Tree cover' 
+          AND d.year IN (2012, 2017, 2022) 
+          AND d.ndvi IS NOT NULL 
+          AND d.precipitation IS NOT NULL;
+      output_filename: tree_cover_resilience.json
+      has_geometry: false
+  expected_python_code: |
+    import pandas as pd
+
+    df = pd.read_json("tree_cover_resilience.json")
+    
+    # 筛选出拥有完整3年数据的网格
+    valid_cells = df['cell_id'].value_counts()
+    valid_cells = valid_cells[valid_cells == 3].index
+    df_filtered = df[df['cell_id'].isin(valid_cells)]
+    
+    resilience_records = []
+    for cell_id, group in df_filtered.groupby('cell_id'):
+        var_ndvi = group['ndvi'].var()
+        var_precip = group['precipitation'].var()
+        resilience = var_ndvi / (var_precip + 0.001)
+        resilience_records.append({'cell_id': int(cell_id), 'resilience': resilience})
+        
+    res_df = pd.DataFrame(resilience_records)
+    top_3 = res_df.sort_values(by='resilience', ascending=False).head(3)
+    
+    print({"top_3_resilient_cells": top_3['cell_id'].tolist()})
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_resilient_cells: [9539, 9276, 4023]
+
+- question_id: 50
+  domain: zhejiang
+  question: 我想知道，以浙江省 29.71493965454115N、120.97912650292037E 这个点为中心、半径 20 公里的范围内，2017 年的平均降水量是多少？
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT AVG(d.precipitation) as avg_precip 
+        FROM zhejiang_fishnet f 
+        JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
+        WHERE d.year = 2017 
+          AND ST_DWithin(
+              f.geometry::geography, 
+              ST_SetSRID(ST_MakePoint(120.97912650292037, 29.71493965454115), 4326)::geography, 
+              20000
+          );
+      output_filename: buffer_avg_precip_2017.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      - avg_precip: 1243.9518018597
+
+- question_id: 51
+  domain: usa
+  question: 2014 年美国哪个州的平均气温最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.air_temp_mean
+        FROM usa_env_metrics_annual e
+        JOIN usa_spatial_base s ON e.asdf_id = s.asdf_id
+        WHERE e.year = 2014
+        ORDER BY e.air_temp_mean DESC
+        LIMIT 1;
+      output_filename: hottest_state_air_temp_2014.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: United States Virgin Islands
+      air_temp_mean: 27.0666666667
+
+- question_id: 52
+  domain: usa
+  question: 2015 年美国哪个州的平均风速最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.windspeed_mean
+        FROM usa_static st
+        JOIN usa_spatial_base s ON st.asdf_id = s.asdf_id
+        ORDER BY st.windspeed_mean DESC
+        LIMIT 1;
+      output_filename: highest_windspeed_state.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Commonwealth of the Northern Mariana Islands
+      windspeed_mean: 6.520551447
+
+- question_id: 53
+  domain: usa
+  question: 2020 年 7 月美国哪个州的夜间灯光最亮？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.ntl_mean
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020 AND m.month = 7
+        ORDER BY m.ntl_mean DESC
+        LIMIT 1;
+      output_filename: brightest_ntl_state_jul_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: District of Columbia
+      ntl_mean: 78.97600329
+
+- question_id: 54
+  domain: usa
+  question: 2012 年美国哪个州的农用地占比最高？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion
+        FROM usa_landcover_annual_proportion l
+        JOIN usa_spatial_base s ON l.asdf_id = s.asdf_id
+        WHERE l.year = 2012 AND l.category = 'croplands'
+        ORDER BY l.proportion DESC
+        LIMIT 1;
+      output_filename: top_cropland_state_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Iowa
+      proportion: 0.8364128864
+
+- question_id: 55
+  domain: usa
+  question: 2020 年 12 月美国哪个州的 PM2.5 最低？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.pm25_mean
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020 AND m.month = 12
+        ORDER BY m.pm25_mean ASC
+        LIMIT 1;
+      output_filename: lowest_pm25_dec_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Commonwealth of the Northern Mariana Islands
+      pm25_mean: 2.4610327364
+
+- question_id: 56
+  domain: zhejiang
+  question: 2022 年浙江省哪个网格的人口最多？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, population
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2022
+        ORDER BY population DESC
+        LIMIT 1;
+      output_filename: max_population_cell_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cell_id: 8586
+      population: 410549
+
+- question_id: 57
+  domain: zhejiang
+  question: 2017 年浙江省哪个网格的年平均气温最高？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, temperature
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2017
+        ORDER BY temperature DESC
+        LIMIT 1;
+      output_filename: hottest_grid_temp_2017.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cell_id: 6009
+      temperature: 19.8071802935
+
+- question_id: 58
+  domain: zhejiang
+  question: 2022 年浙江省哪个网格的 ERA5 降水最高？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, era5_precip
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2022
+        ORDER BY era5_precip DESC
+        LIMIT 1;
+      output_filename: max_era5_precip_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cell_id: 696
+      era5_precip: 2800.1624486048
+
+- question_id: 59
+  domain: zhejiang
+  question: 浙江省哪个城市的行政区划代码是 330700？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT fullname, code
+        FROM zhejiang_city
+        WHERE code = '330700';
+      output_filename: city_code_330700.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+      fullname: 金华市
+      code: '330700'
+
+- question_id: 60
+  domain: zhejiang
+  question: 浙江省海拔最高的 3 个网格 ID 是哪些？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, dem
+        FROM zhejiang_fishnet_static
+        ORDER BY dem DESC
+        LIMIT 3;
+      output_filename: top3_dem_cells.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - cell_id: 1874
+      - cell_id: 1766
+      - cell_id: 1975
+
+- question_id: 61
+  domain: zhejiang
+  question: 浙江省静态表里有多少个网格属于 ESA 分类中的 Tree cover？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count
+        FROM zhejiang_fishnet_static
+        WHERE landcover_esa = 'Tree cover';
+      output_filename: tree_cover_grid_count.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 7016
+
+- question_id: 62
+  domain: zhejiang
+  question: 2022 年浙江省有多少个网格的土地覆盖类型是 IGBP 分类中的 Urban and Built-up Lands？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2022 AND landcover_igbp = 'Urban and Built-up Lands';
+      output_filename: urban_builtup_count_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 820
+
+- question_id: 63
+  domain: usa
+  question: 2010 年美国哪个州的人口总量最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.pop_sum
+        FROM usa_env_metrics_annual e
+        JOIN usa_spatial_base s ON e.asdf_id = s.asdf_id
+        WHERE e.year = 2010
+        ORDER BY e.pop_sum DESC
+        LIMIT 1;
+      output_filename: max_population_state_2010.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: California
+
+- question_id: 64
+  domain: usa
+  question: 2020 年 1 月美国哪个州的白天地表平均温度最低？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.lst_day_mean
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020 AND m.month = 1
+        ORDER BY m.lst_day_mean ASC
+        LIMIT 1;
+      output_filename: lowest_lst_day_jan_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Alaska
+
+- question_id: 65
+  domain: usa
+  question: 2012 年美国哪个州的城市建设用地占比最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion
+        FROM usa_landcover_annual_proportion l
+        JOIN usa_spatial_base s ON l.asdf_id = s.asdf_id
+        WHERE l.year = 2012 AND l.category = 'urban_and_builtup'
+        ORDER BY l.proportion DESC
+        LIMIT 1;
+      output_filename: max_urban_builtup_state_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: District of Columbia
+
+- question_id: 66
+  domain: usa
+  question: 对比 2014 年和 2015 年美国各州的平均 PM2.5，找出增加最多的州和增加值。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", (e15.pm25_mean - e14.pm25_mean) AS pm25_increase
+        FROM usa_spatial_base s
+        JOIN usa_env_metrics_annual e14 ON s.asdf_id = e14.asdf_id AND e14.year = 2014
+        JOIN usa_env_metrics_annual e15 ON s.asdf_id = e15.asdf_id AND e15.year = 2015
+        ORDER BY pm25_increase DESC
+        LIMIT 1;
+      output_filename: max_pm25_increase_2014_2015.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Alaska
+      pm25_increase: 1.3640374152
+
+- question_id: 67
+  domain: usa
+  question: 统计 2020 年美国每个州 12 个月的平均夜间灯光，再找出年均夜间灯光最高的州。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", AVG(m.ntl_mean) AS avg_ntl_2020
+        FROM usa_env_metrics_monthly_2020 m
+        JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+        WHERE m.year = 2020
+        GROUP BY s."shapeName"
+        ORDER BY avg_ntl_2020 DESC
+        LIMIT 1;
+      output_filename: top_avg_ntl_state_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: District of Columbia
+      avg_ntl_2020: 77.0359770298
+
+- question_id: 68
+  domain: usa
+  question: 2012 年美国哪些州的混合森林占比高于 20%，并按占比从高到低排序？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion
+        FROM usa_landcover_annual_proportion l
+        JOIN usa_spatial_base s ON l.asdf_id = s.asdf_id
+        WHERE l.year = 2012 AND l.category = 'mixed_forest' AND l.proportion > 0.2
+        ORDER BY l.proportion DESC;
+      output_filename: mixed_forest_over_20_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - shapeName: Maine
+      - shapeName: New Hampshire
+      - shapeName: Massachusetts
+      - shapeName: Vermont
+      - shapeName: South Carolina
+      - shapeName: Alabama
+      - shapeName: Georgia
+      - shapeName: North Carolina
+      - shapeName: Mississippi
+      - shapeName: Arkansas
+      - shapeName: Rhode Island
+      - shapeName: Minnesota
+      - shapeName: Louisiana
+      - shapeName: Michigan
+      - shapeName: Wisconsin
+      - shapeName: Virginia
+
+- question_id: 69
+  domain: usa
+  question: 2020 年美国哪些州在 8 月的 PM2.5 比 1 月更低？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", jan.pm25_mean AS jan_pm25, aug.pm25_mean AS aug_pm25
+        FROM usa_spatial_base s
+        JOIN usa_env_metrics_monthly_2020 jan ON s.asdf_id = jan.asdf_id AND jan.year = 2020 AND jan.month = 1
+        JOIN usa_env_metrics_monthly_2020 aug ON s.asdf_id = aug.asdf_id AND aug.year = 2020 AND aug.month = 8
+        WHERE aug.pm25_mean < jan.pm25_mean;
+      output_filename: aug_gt_jan_pm25_states_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - shapeName: Florida
+      - shapeName: Illinois
+      - shapeName: Minnesota
+      - shapeName: New Hampshire
+      - shapeName: Vermont
+      - shapeName: Wisconsin
+      - shapeName: Pennsylvania
+      - shapeName: Ohio
+      - shapeName: Hawaii
+      - shapeName: Commonwealth of the Northern Mariana Islands
+      - shapeName: Guam
+      - shapeName: Alaska
+      - shapeName: American Samoa
+      - shapeName: Indiana
+      - shapeName: Iowa
+
+- question_id: 70
+  domain: usa
+  question: 2015 年美国哪些州的平均气温高于全国平均值，同时平均风速也高于全国平均值？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.air_temp_mean, st.windspeed_mean
+        FROM usa_spatial_base s
+        JOIN usa_env_metrics_annual e ON s.asdf_id = e.asdf_id
+        JOIN usa_static st ON s.asdf_id = st.asdf_id
+        WHERE e.year = 2015
+          AND e.air_temp_mean > (SELECT AVG(air_temp_mean) FROM usa_env_metrics_annual WHERE year = 2015)
+          AND st.windspeed_mean > (SELECT AVG(windspeed_mean) FROM usa_static)
+        ORDER BY e.air_temp_mean DESC;
+      output_filename: warm_and_windy_states_2015.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - shapeName: United States Virgin Islands
+      - shapeName: Puerto Rico
+      - shapeName: Texas
+      - shapeName: Guam
+      - shapeName: Oklahoma
+      - shapeName: Commonwealth of the Northern Mariana Islands
+      - shapeName: Hawaii
+      - shapeName: Delaware
+      - shapeName: American Samoa
+      - shapeName: Kansas
+
+- question_id: 71
+  domain: usa
+  question: 统计 2020 年美国各州白天地表温度最高的月份，并列出加州的结果。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT sub."shapeName", sub.month, sub.lst_day_mean
+        FROM (
+            SELECT s."shapeName", m.month, m.lst_day_mean,
+                   ROW_NUMBER() OVER (PARTITION BY s."shapeName" ORDER BY m.lst_day_mean DESC) AS rn
+            FROM usa_env_metrics_monthly_2020 m
+            JOIN usa_spatial_base s ON m.asdf_id = s.asdf_id
+            WHERE m.year = 2020
+        ) sub
+        WHERE sub.rn = 1 AND sub."shapeName" = 'California';
+      output_filename: california_peak_lst_month_2020.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: California
+      month: 7
+      lst_day_mean: 314.034804699
+
+- question_id: 72
+  domain: usa
+  question: 2012 年美国哪些州的稀树草原占比高于农用地占比？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", sav.proportion AS savannas_prop, crop.proportion AS croplands_prop
+        FROM usa_spatial_base s
+        JOIN usa_landcover_annual_proportion sav ON s.asdf_id = sav.asdf_id AND sav.year = 2012 AND sav.category = 'savannas'
+        JOIN usa_landcover_annual_proportion crop ON s.asdf_id = crop.asdf_id AND crop.year = 2012 AND crop.category = 'croplands'
+        WHERE sav.proportion > crop.proportion
+        ORDER BY sav.proportion DESC;
+      output_filename: savannas_gt_croplands_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - shapeName: Alaska
+
+- question_id: 73
+  domain: zhejiang
+  question: 对比 2012 年和 2022 年浙江省各网格的人口，找出人口增加最多的网格和增长值。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d22.cell_id, (d22.population - d12.population) AS population_increase
+        FROM zhejiang_fishnet_dynamic d12
+        JOIN zhejiang_fishnet_dynamic d22 ON d12.cell_id = d22.cell_id
+        WHERE d12.year = 2012 AND d22.year = 2022
+        ORDER BY population_increase DESC
+        LIMIT 1;
+      output_filename: max_population_growth_grid_2012_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cell_id: 8586
+      population_increase: 74415
+
+- question_id: 74
+  domain: zhejiang
+  question: 统计 2022 年浙江省各类 IGBP 土地覆盖的平均夜间灯光，找出平均值最高的那一类。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_igbp, AVG(nightlight) AS avg_nightlight
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2022
+        GROUP BY landcover_igbp
+        ORDER BY avg_nightlight DESC
+        LIMIT 1;
+      output_filename: top_landcover_avg_nightlight_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      landcover_igbp: Urban and Built-up Lands
+      avg_nightlight: 18.651765244
+
+- question_id: 75
+  domain: zhejiang
+  question: 2017 年浙江省一共有多少个网格的 NDVI 高于当年平均值，而且降水量也高于当年平均值？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(cell_id) as grid_count
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2017
+          AND ndvi > (SELECT AVG(ndvi) FROM zhejiang_fishnet_dynamic WHERE year = 2017)
+          AND precipitation > (SELECT AVG(precipitation) FROM zhejiang_fishnet_dynamic WHERE year = 2017);
+      output_filename: high_ndvi_high_precip_count_2017.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 3938
+
+- question_id: 76
+  domain: zhejiang
+  question: 2022 年浙江省一共有多少个网格同时满足人口超过 5000 且夜间灯光大于 10？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(cell_id) as grid_count
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2022 AND population > 5000 AND nightlight > 10;
+      output_filename: pop_over_5000_light_over_10_count_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 803
+
+- question_id: 77
+  domain: zhejiang
+  question: 2012 年浙江省各类 Dynamic World 土地覆盖里，哪一类的平均建筑表面积最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_dw, AVG(built_surface) AS avg_built_surface
+        FROM zhejiang_fishnet_dynamic
+        WHERE year = 2012
+        GROUP BY landcover_dw
+        ORDER BY avg_built_surface DESC
+        LIMIT 1;
+      output_filename: top_dw_avg_built_surface_2012.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      landcover_dw: Built
+
+- question_id: 78
+  domain: zhejiang
+  question: 统计浙江省各城市范围内完全或部分落入的网格数量，并列出杭州市的结果。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT c.fullname, COUNT(f.cell_id) AS grid_count
+        FROM zhejiang_city c
+        JOIN zhejiang_fishnet f ON ST_Intersects(c.geometry, f.geometry)
+        GROUP BY c.fullname
+        HAVING c.fullname = '杭州市';
+      output_filename: hangzhou_intersect_grid_count.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      fullname: 杭州市
+      grid_count: 1554
+
+- question_id: 79
+  domain: zhejiang
+  question: 2022 年浙江省哪些网格的海拔低于 50、但坡度高于 12？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.cell_id, s.dem, s.slope
+        FROM zhejiang_fishnet_static s
+        WHERE s.dem < 50 AND s.slope > 12
+        ORDER BY s.slope DESC;
+      output_filename: low_dem_high_slope_cells.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - cell_id: 7208
+      - cell_id: 9208
+      - cell_id: 9128
+      - cell_id: 2952
+      - cell_id: 9115
+      - cell_id: 8959
+
+- question_id: 80
+  domain: zhejiang
+  question: 对比 2012 年和 2022 年浙江省各网格的夜间灯光，找出夜间灯光增幅最大的前 5 个网格，并给出其对应的夜间灯光增幅。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d22.cell_id, (d22.nightlight - d12.nightlight) AS nightlight_increase
+        FROM zhejiang_fishnet_dynamic d12
+        JOIN zhejiang_fishnet_dynamic d22 ON d12.cell_id = d22.cell_id
+        WHERE d12.year = 2012 AND d22.year = 2022
+        ORDER BY nightlight_increase DESC
+        LIMIT 5;
+      output_filename: top5_nightlight_growth_2012_2022.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      - cell_id: 9242
+        nightlight_increase: 99.4912039591
+      - cell_id: 9191
+        nightlight_increase: 94.3604790587
+      - cell_id: 9241
+        nightlight_increase: 79.101647626
+      - cell_id: 9376
+        nightlight_increase: 50.3357469884
+      - cell_id: 9190
+        nightlight_increase: 45.3238671414
+
+
+
+
