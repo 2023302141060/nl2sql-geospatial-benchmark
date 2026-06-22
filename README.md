@@ -44,8 +44,8 @@ The benchmark can be shared together with the following database setup files:
 |---|---|
 | `benchmark/dev_plus.yaml` | Main benchmark dataset |
 | `benchmark/README.md` | Dataset description |
-| `create_env_and_database/create_database.sql` | PostgreSQL/PostGIS SQL dump for creating and populating the evaluation database |
-| `create_env_and_database/reqiurements.txt` | Python environment dependency list for database setup and reproduction |
+| `create_database.sql` | PostgreSQL/PostGIS SQL dump for creating and populating the evaluation database |
+| `reqiurements.txt` | Python environment dependency list for database setup and reproduction |
 
 ## Example Use Cases
 
