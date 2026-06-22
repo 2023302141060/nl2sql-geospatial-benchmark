@@ -1,6 +1,6 @@
-# dev_plus.yaml Dataset Description
+﻿# dev_plus.yaml Dataset Description
 
-`dev_plus.yaml` is a Chinese NL2SQL / Agent benchmark dataset for geospatial and spatiotemporal data analysis tasks. The file can be uploaded directly to GitHub to describe and share the benchmark samples.
+`dev_plus.yaml` is a Chinese NL2SQL / Agent benchmark dataset for geospatial and spatiotemporal data analysis tasks.
 
 Each sample contains a Chinese natural language question, a reference SQL execution plan, optional Python analysis code, and expected results for evaluation. The dataset is suitable for evaluating model performance on natural language to SQL generation, spatial data querying, statistical analysis, and multi-step SQL + Python reasoning tasks.
 
@@ -36,6 +36,17 @@ The current file contains 80 benchmark samples:
 | `expected_python_code` | Reference Python code for secondary analysis; `null` for SQL-only tasks |
 | `expected_execution_result` | Expected result or key result subset for evaluating correctness |
 
+## Related Files
+
+The benchmark can be shared together with the following database setup files:
+
+| File | Description |
+|---|---|
+| `benchmark/dev_plus.yaml` | Main benchmark dataset |
+| `benchmark/README.md` | Dataset description |
+| `create_env_and_database/create_database.sql` | PostgreSQL/PostGIS SQL dump for creating and populating the evaluation database |
+| `create_env_and_database/reqiurements.txt` | Python environment dependency list for database setup and reproduction |
+
 ## Example Use Cases
 
 This dataset can be used to:
@@ -47,6 +58,7 @@ This dataset can be used to:
 
 ## Notes
 
-- `dev_plus.yaml` contains benchmark questions, reference solutions, and expected results only. It does not include the actual database files.
+- `dev_plus.yaml` contains benchmark questions, reference solutions, and expected results.
+- `create_database.sql` provides the database schema and data needed to reproduce the benchmark environment.
 - The SQL table names and column names must match the target evaluation database.
-- For dataset preview or benchmark sharing, uploading `dev_plus.yaml` together with this README is sufficient.
+- For GitHub sharing, upload `dev_plus.yaml`, this README, `create_database.sql`, and `reqiurements.txt` while preserving the relative paths shown above.
