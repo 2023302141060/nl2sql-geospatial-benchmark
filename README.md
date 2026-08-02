@@ -1,6 +1,6 @@
 # NL2SQL Geospatial Benchmark (200 Questions)
 
-This repository contains the public reproduction package for the benchmark used in the revised CGD-SMAF paper. It intentionally publishes the benchmark, database-construction material, strict evaluator, and reproduction instructions only. It does not contain framework source code, model API keys, database passwords, local paths, or raw experiment logs.
+This repository contains the public reproduction package for the benchmark used in the CGD-QCSF paper. It publishes the benchmark, database-construction material, strict evaluator, and reproduction instructions only. It does not contain framework source code, model API keys, database passwords, local paths, or raw experiment logs.
 
 ## Contents
 
@@ -81,4 +81,4 @@ The primary metric is `strict_structured_accuracy`. It checks answer-schema vali
 
 ## Citation
 
-Please cite the revised CGD-SMAF paper when using this benchmark. Formal citation metadata will be added after publication.
+Please cite the CGD-QCSF paper when using this benchmark. Formal citation metadata will be added after publication.
