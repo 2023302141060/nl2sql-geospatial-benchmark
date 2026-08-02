@@ -1,64 +1,84 @@
-﻿# dev_plus.yaml Dataset Description
+# NL2SQL Geospatial Benchmark (200 Questions)
 
-`dev_plus.yaml` is a Chinese NL2SQL / Agent benchmark dataset for geospatial and spatiotemporal data analysis tasks.
+This repository contains the public reproduction package for the benchmark used in the revised CGD-SMAF paper. It intentionally publishes the benchmark, database-construction material, strict evaluator, and reproduction instructions only. It does not contain framework source code, model API keys, database passwords, local paths, or raw experiment logs.
 
-Each sample contains a Chinese natural language question, a reference SQL execution plan, optional Python analysis code, and expected results for evaluation. The dataset is suitable for evaluating model performance on natural language to SQL generation, spatial data querying, statistical analysis, and multi-step SQL + Python reasoning tasks.
-
-## Dataset Size
-
-The current file contains 80 benchmark samples:
-
-| Category | Count |
-|---|---:|
-| U.S. state-level environmental and land-cover questions | 40 |
-| Zhejiang city and fishnet-grid questions | 40 |
-| easy | 26 |
-| medium | 24 |
-| hard | 30 |
-| SQL-only tasks | 54 |
-| SQL + Python analysis tasks | 26 |
-
-## File Format
-
-`dev_plus.yaml` is encoded in UTF-8. Its top-level structure is a YAML list, where each item represents one benchmark question. The main fields are:
-
-| Field | Description |
-|---|---|
-| `question_id` | Unique question ID |
-| `domain` | Data domain, currently `usa` or `zhejiang` |
-| `question` | Chinese natural language question |
-| `difficulty` | Difficulty label: `easy`, `medium`, or `hard` |
-| `requires_sandbox` | Whether additional Python sandbox analysis is required |
-| `expected_sql_plan` | Reference SQL execution plan containing one or more SQL queries |
-| `expected_sql_plan.queries[].sql` | Reference SQL statement |
-| `expected_sql_plan.queries[].output_filename` | Suggested filename for saving the SQL result |
-| `expected_sql_plan.queries[].has_geometry` | Whether the query result contains geometry fields |
-| `expected_python_code` | Reference Python code for secondary analysis; `null` for SQL-only tasks |
-| `expected_execution_result` | Expected result or key result subset for evaluating correctness |
-
-## Related Files
-
-The benchmark can be shared together with the following database setup files:
+## Contents
 
 | File | Description |
-|---|---|
-| `benchmark/dev_plus.yaml` | Main benchmark dataset |
-| `benchmark/README.md` | Dataset description |
-| `create_database.sql` | PostgreSQL/PostGIS SQL dump for creating and populating the evaluation database |
-| `reqiurements.txt` | Python environment dependency list for database setup and reproduction |
+| --- | --- |
+| `dev_plus.yaml` | 200 verified Chinese geospatial and spatio-temporal questions |
+| `create_database.sql` | PostgreSQL/PostGIS schema and data snapshot used by the benchmark |
+| `evaluate_experiments.py` | Strict structured evaluator used in the revised experiments |
+| `requirements.txt` | Minimal Python dependencies for reading the benchmark and running the evaluator |
 
-## Example Use Cases
+## Benchmark Composition
 
-This dataset can be used to:
+| Split | Count |
+| --- | ---: |
+| U.S. state/spatial-unit questions | 100 |
+| Zhejiang city/vector-fishnet questions | 100 |
+| Easy | 66 |
+| Medium | 64 |
+| Hard | 70 |
+| SQL-only reference path | 134 |
+| SQL + Python reference path | 66 |
+| **Total** | **200** |
 
-- test whether an NL2SQL model can generate correct SQL;
-- test whether an Agent can complete SQL queries and Python analysis step by step;
-- compare different models or Agent frameworks on geospatial and spatiotemporal analysis tasks;
-- build an automated benchmark using `question_id`, `expected_sql_plan`, and `expected_execution_result` for result validation.
+The Zhejiang fishnet is stored as vector polygons with cell-level attributes. It is not a native raster dataset and should not be interpreted as PostGIS Raster or GeoTIFF pixel computation.
 
-## Notes
+## YAML Fields
 
-- `dev_plus.yaml` contains benchmark questions, reference solutions, and expected results.
-- `create_database.sql` provides the database schema and data needed to reproduce the benchmark environment.
-- The SQL table names and column names must match the target evaluation database.
-- For GitHub sharing, upload `dev_plus.yaml`, this README, `create_database.sql`, and `reqiurements.txt` while preserving the relative paths shown above.
+Each item contains:
+
+| Field | Meaning |
+| --- | --- |
+| `question_id` | Stable integer ID |
+| `domain` | `usa` or `zhejiang` |
+| `question` | Chinese natural-language question |
+| `difficulty` | `easy`, `medium`, or `hard` |
+| `requires_sandbox` | Whether the verified reference path uses Python computation |
+| `expected_sql_plan` | Reference SQL retrieval logic and output files |
+| `expected_python_code` | Executable reference computation, or `null` for SQL-only tasks |
+| `expected_execution_result` | Database/sandbox-verified structured result |
+
+Reference SQL and Python describe one verified solution path. Evaluated systems may use different code as long as their final structured results are semantically equivalent.
+
+## Database Setup
+
+Create an empty PostgreSQL database with PostGIS available, then restore the supplied SQL file using a database account you control. Do not put credentials into this repository.
+
+```powershell
+psql -U <user> -d <database> -f create_database.sql
+```
+
+## Evaluator
+
+Install the public evaluator dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Evaluate one or more run directories:
+
+```powershell
+python evaluate_experiments.py `
+  --benchmark_path dev_plus.yaml `
+  --run_dirs <run_dir_1> <run_dir_2> `
+  --output_dir evaluation_results
+```
+
+Each run directory should contain one result YAML per question with the same fields produced by the released experiment format, including `metadata.question_id`, structured answer fields, execution metrics, token usage, and tool-routing trace.
+
+The primary metric is `strict_structured_accuracy`. It checks answer-schema validity, entity–value pairing, list membership and order, numerical tolerance, units, exact integer identifiers, and tie-aware Top-K equivalence. `first_execution_path_success_rate` is auxiliary: it requires a correct strict answer with no failed tool call and no guardrail retry. A correct result obtained after bounded recovery remains correct under the primary metric.
+
+## Reproducibility Boundary
+
+- Expected answers were obtained by running reference SQL and, when required, reference Python against the supplied database snapshot.
+- The benchmark covers structured relational data, vector boundaries, and vector fishnet attributes.
+- Native raster, trajectory streams, real-time sensors, open-web data discovery, ArcGIS Pro control, and QGIS desktop control are outside this release.
+- Large model providers are external services; API availability, pricing, and model behavior may change.
+
+## Citation
+
+Please cite the revised CGD-SMAF paper when using this benchmark. Formal citation metadata will be added after publication.

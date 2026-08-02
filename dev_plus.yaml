@@ -76,8 +76,10 @@
   expected_execution_result:
     exact_match_sql_rows: true
     data_payload_subset:
-      Summer_avg_temp: 312.4674091797
-      Winter_avg_temp: 286.6405922613
+      - season: Summer
+        avg_temp: 312.4674091797
+      - season: Winter
+        avg_temp: 286.6405922613
 
 - question_id: 4
   domain: usa
@@ -139,7 +141,7 @@
 
 - question_id: 6
   domain: usa
-  question: 找出距离纽约州中心 500 公里以内的所有州，再计算这些州在 2012 年土地覆盖类型为’城市建设用地’的土地的平均比例。
+  question: 以纽约州几何质心为基准，找出州域边界到该质心的最短大地线距离不超过 500 公里的所有空间单元，再计算这些空间单元 2012 年城市建设用地占比的平均值。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -538,7 +540,7 @@
 
 - question_id: 16
   domain: zhejiang
-  question: 把 2022 年浙江省 [`era5_temp`](benchmark/dev_plus.yaml:545) 高于 18.9 的高温网格，按几何中心位置分成 4 个热点聚类。
+  question: 把 2022 年浙江省 era5_temp 高于 18.9 的高温网格按 cell_id 升序排列，投影到 EPSG:32651 后计算几何中心，并使用 K-Means（k=4、random_state=42、n_init=10）分成 4 个热点聚类；输出每个网格的 cell_id 和 cluster。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -547,21 +549,22 @@
         SELECT f.cell_id, f.geometry, d.era5_temp 
         FROM zhejiang_fishnet f 
         JOIN zhejiang_fishnet_dynamic d ON f.cell_id = d.cell_id 
-        WHERE d.year = 2022 AND d.era5_temp > 18.9;
+        WHERE d.year = 2022 AND d.era5_temp > 18.9
+        ORDER BY f.cell_id;
       output_filename: high_temp_grids.geojson
       has_geometry: true
   expected_python_code: |
     import geopandas as gpd
     from sklearn.cluster import KMeans
 
-    gdf = gpd.read_file("high_temp_grids.geojson")
+    gdf = gpd.read_file("high_temp_grids.geojson").sort_values("cell_id").to_crs(32651)
 
     # 提取网格质心用于聚类
     centroids = gdf.geometry.centroid
     coords = list(zip(centroids.x, centroids.y))
 
     # K-Means 聚类
-    kmeans = KMeans(n_clusters=4, random_state=42)
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
     gdf['cluster'] = kmeans.fit_predict(coords)
 
     print(gdf[['cell_id', 'cluster']].to_dict(orient='records'))
@@ -569,35 +572,35 @@
     exact_match_sql_rows: false
     data_payload_subset:
       - cell_id: 795
-        cluster: 2
+        cluster: 3
       - cell_id: 796
-        cluster: 2
+        cluster: 1
       - cell_id: 797
-        cluster: 2
+        cluster: 1
       - cell_id: 874
-        cluster: 0
+        cluster: 3
       - cell_id: 875
-        cluster: 0
+        cluster: 1
       - cell_id: 876
-        cluster: 0
+        cluster: 1
       - cell_id: 957
         cluster: 0
       - cell_id: 958
-        cluster: 3
+        cluster: 0
       - cell_id: 959
-        cluster: 3
+        cluster: 0
       - cell_id: 1042
-        cluster: 1
+        cluster: 2
       - cell_id: 1043
-        cluster: 3
+        cluster: 2
       - cell_id: 1132
-        cluster: 1
+        cluster: 2
       - cell_id: 1133
-        cluster: 1
+        cluster: 2
 
 - question_id: 17
   domain: zhejiang
-  question: 找出位于宁波市外侧 10 公里范围内、但不在宁波市行政区内的渔网格，并算出这些网格 2012 年的平均降水量。
+  question: 构造宁波市行政区外侧 0—10 公里环带，找出与该环带相交的渔网格，并计算这些网格 2012 年降水量的算术平均值。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -641,6 +644,7 @@
     # 5. 标准化输出（ensure_ascii=False 避免中文乱码）
     print(json.dumps({
         "status": "ok",
+        "answer_text": f"宁波市外侧 0—10 公里环带内共有 {len(target_grids)} 个相交网格，2012 年平均降水量为 {avg_precip:.6f}。",
         "data_payload": {
             "avg_precipitation_in_10km_ring": avg_precip,
             "num_grid_cells": len(target_grids)
@@ -653,7 +657,7 @@
 
 - question_id: 18
   domain: zhejiang
-  question: 找出 2012 到 2022 年间浙江省土地覆盖类型发生变化的所有渔网格，并计算这些网格变化后的总实际面积。
+  question: 找出 2012 到 2022 年间 IGBP 土地覆盖类型发生变化的浙江渔网格。每个标准网格按 1 平方公里计，以 area_ratio 作为省界内有效面积比例，计算变化网格的有效面积总和（平方公里）。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -661,12 +665,11 @@
     - sql: |
         SELECT 
             cell_id, 
-            geometry, 
             area_ratio 
         FROM zhejiang_fishnet
-        WHERE geometry IS NOT NULL;
-      output_filename: zhejiang_fishnet_base.geojson
-      has_geometry: true
+        WHERE area_ratio IS NOT NULL;
+      output_filename: zhejiang_fishnet_base.json
+      has_geometry: false
     - sql: |
         SELECT 
             cell_id, 
@@ -685,13 +688,12 @@
       has_geometry: false
   expected_python_code: |
     import json
-    import geopandas as gpd
     import pandas as pd
     import traceback
 
     try:
-        # 1. 读取基础渔网格空间数据
-        grid_gdf = gpd.read_file("zhejiang_fishnet_base.geojson")
+        # 1. 读取基础渔网格的有效面积比例
+        grid_df = pd.read_json("zhejiang_fishnet_base.json", orient="records")
 
         # 2. 分别读取 2012 和 2022 年的土地覆盖属性数据
         df_2012 = pd.read_json("landcover_2012.json", orient="records")
@@ -704,17 +706,9 @@
         if df_changed.empty:
             total_area_km2 = 0.0
         else:
-            # 4. 将发生变化的属性结果与空间底图关联
-            changed_gdf = grid_gdf.merge(df_changed, on="cell_id")
-
-            # 5. 【关键】投影到米制平面坐标系(EPSG:3857)以计算实际面积
-            changed_gdf = changed_gdf.to_crs(epsg=3857)
-
-            # 6. 【关键】计算实际物理面积：网格几何面积 * 面积边缘折算权重(area_ratio)
-            changed_gdf["actual_area_m2"] = changed_gdf.geometry.area * changed_gdf["area_ratio"]
-
-            # 7. 汇总总面积并转换为平方千米
-            total_area_km2 = changed_gdf["actual_area_m2"].sum() / 1e6
+            # 4. 每个标准网格为 1 km²，area_ratio 即其落在省界内的有效面积比例
+            changed_df = grid_df.merge(df_changed, on="cell_id")
+            total_area_km2 = changed_df["area_ratio"].sum()
 
         # 8. 输出符合协议的 JSON
         print(json.dumps({
@@ -735,7 +729,7 @@
   expected_execution_result:
     exact_match_sql_rows: false
     data_payload_subset:
-      total_changed_area_km2: 23173.770437829433
+      total_changed_area_km2: 1463.000437596118
 
 - question_id: 19
   domain: usa
@@ -800,7 +794,7 @@
 
 - question_id: 22
   domain: usa
-  question: 拿到 2020 年美国各州每个月的白天地表平均温度后，用 Python 算出哪个州全年月度温度波动最大，以及对应的波动值。
+  question: 获取 2020 年美国各空间单元逐月白天地表平均温度；对每个空间单元计算相邻月份温差绝对值的全年平均值，并找出该平均值最大的空间单元及数值。
   difficulty: medium
   requires_sandbox: true
   expected_sql_plan:
@@ -1005,7 +999,7 @@
 
 - question_id: 29
   domain: usa
-  question: 提取 2015 年美国各州的平均风速和平均气温，用 Python 做 Z-Score 标准化，再列出加州标准化后的两个数值。
+  question: 提取数据库中美国全部 56 个空间单元（含海外属地）2015 年的平均风速和平均气温，用总体标准差（ddof=0）做 Z-Score 标准化，再列出加州标准化后的两个数值。
   difficulty: medium
   requires_sandbox: true
   expected_sql_plan:
@@ -1285,7 +1279,7 @@
 
 - question_id: 40
   domain: zhejiang
-  question: 结合动态表和静态表，统计浙江省 2022 年各类土地覆盖对应的平均海拔，并按平均海拔从高到低排序。
+  question: 结合动态表和静态表，按 landcover_igbp 分类统计浙江省 2022 年各类土地覆盖对应的平均海拔，并按平均海拔从高到低排序。
   difficulty: hard
   requires_sandbox: false
   expected_sql_plan:
@@ -1351,13 +1345,13 @@
 
 - question_id: 42
   domain: zhejiang
-  question: 取出 2017 年浙江省各网格的海拔和气温，用 Python 做 Z-Score 标准化，再找出标准化后气温最高的前 2 个网格 ID 及其数值。
+  question: 取出 2017 年浙江省各网格的海拔 dem 和年平均气温 temperature，用总体标准差（ddof=0）分别做 Z-Score 标准化，再找出标准化后气温最高的前 2 个网格 ID 及其数值。
   difficulty: medium
   requires_sandbox: true
   expected_sql_plan:
     queries:
     - sql: |
-        SELECT s.cell_id, s.dem, d.era5_temp 
+        SELECT s.cell_id, s.dem, d.temperature 
         FROM zhejiang_fishnet_static s 
         JOIN zhejiang_fishnet_dynamic d ON s.cell_id = d.cell_id 
         WHERE d.year = 2017;
@@ -1369,7 +1363,7 @@
     
     df = pd.read_json("dem_temp_2017.json").dropna()
     scaler = StandardScaler()
-    df[['dem_z', 'temp_z']] = scaler.fit_transform(df[['dem', 'era5_temp']])
+    df[['dem_z', 'temp_z']] = scaler.fit_transform(df[['dem', 'temperature']])
     
     top_2 = df.sort_values(by='temp_z', ascending=False).head(2)
     result = top_2[['cell_id', 'temp_z']].to_dict(orient='records')
@@ -1378,10 +1372,10 @@
     exact_match_sql_rows: false
     data_payload_subset:
       top_2_hottest_z_scores: 
-        - cell_id: 6509
-          temp_z: 2.392178174790611
-        - cell_id: 6386
-          temp_z: 2.392178174790611
+        - cell_id: 6009
+          temp_z: 2.3993213327474607
+        - cell_id: 6384
+          temp_z: 2.3732932679077234
 
 - question_id: 43
   domain: zhejiang
@@ -1485,7 +1479,7 @@
 
 - question_id: 46
   domain: usa
-  question: 提取美国各州 2012 年的 PM2.5、总人口、光伏潜力、平均风速、平均坡度和城市建设用地占比，用 Python 建一个多元线性回归模型，输出 R-squared 和对 PM2.5 影响最大的特征。
+  question: 提取美国全部空间单元 2012 年的 PM2.5、总人口、光伏潜力、平均风速、平均坡度和城市建设用地占比；先对五个自变量做 Z-Score 标准化，再建立多元线性回归，输出 R-squared 及绝对标准化回归系数最大的特征。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -1511,18 +1505,19 @@
     import pandas as pd
     from sklearn.linear_model import LinearRegression
     from sklearn.metrics import r2_score
+    from sklearn.preprocessing import StandardScaler
     import numpy as np
 
     df = pd.read_json("usa_multivariate_2012.json").dropna()
     features = ['pop_sum', 'pvout_mean', 'windspeed_mean', 'slope_mean', 'urban_prop']
-    X = df[features]
+    X = StandardScaler().fit_transform(df[features])
     y = df['pm25_mean']
 
     model = LinearRegression()
     model.fit(X, y)
     r2 = r2_score(y, model.predict(X))
     
-    # 找出影响最大的特征 (系数绝对值最大)
+    # 标准化后各自变量量纲一致，可按系数绝对值比较影响强弱
     max_coef_idx = np.argmax(np.abs(model.coef_))
     most_important_feature = features[max_coef_idx]
 
@@ -1531,11 +1526,11 @@
     exact_match_sql_rows: false
     data_payload_subset:
       r_squared: 0.616
-      most_important_feature: "urban_prop"
+      most_important_feature: "slope_mean"
 
 - question_id: 47
   domain: zhejiang
-  question: 找出完全或部分位于杭州市内的所有渔网格，取出它们 2012 年和 2022 年的气温、夜间灯光数据。用 Python 计算每个网格 10 年间的热岛强度变化和夜间灯光变化，再输出热岛强度增长最快的网格 ID，以及两者的相关系数。
+  question: 找出与杭州市行政区相交的所有渔网格，取出其 2012 年和 2022 年气温与夜间灯光。把网格当年气温减去当年杭州市相交网格平均气温定义为 HII，计算各网格 2012—2022 年的 HII 变化和夜间灯光变化，输出 HII 增长最快的网格 ID 及两种变化量的皮尔逊相关系数。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -1666,7 +1661,7 @@
 
 - question_id: 49
   domain: zhejiang
-  question: 筛选出 ESA 土地覆盖类型为 Tree cover 的网格，提取它们在 2012、2017、2022 年的 NDVI 和降水量，用 Python 计算生态恢复力指数，并输出指数最高的 3 个网格 ID。
+  question: 筛选 ESA 土地覆盖类型为 Tree cover 且 2012、2017、2022 三期数据完整的网格。定义生态恢复力指数为三期 NDVI 的样本方差除以（三期降水量的样本方差 + 0.001），用 Python 计算并输出指数最高的 3 个网格 ID。
   difficulty: hard
   requires_sandbox: true
   expected_sql_plan:
@@ -2444,6 +2439,3450 @@
       - cell_id: 9190
         nightlight_increase: 45.3238671414
 
+- question_id: 81
+  domain: usa
+  question: 2010 年美国哪个空间单元的年均 PM2.5 最低？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.pm25_mean FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2010 ORDER BY e.pm25_mean ASC LIMIT 1;
+      output_filename: q81_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Commonwealth of the Northern Mariana Islands
+      pm25_mean: 3.1514942286
+- question_id: 82
+  domain: usa
+  question: 2013 年美国哪个空间单元的年平均气温最低？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.air_temp_mean FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2013 ORDER BY e.air_temp_mean ASC LIMIT 1;
+      output_filename: q82_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Alaska
+      air_temp_mean: -3.636604015
+- question_id: 83
+  domain: usa
+  question: 2011 年美国哪个空间单元的人口总量最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.pop_sum FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2011 ORDER BY e.pop_sum DESC LIMIT 1;
+      output_filename: q83_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: California
+      pop_sum: 37654432.216
+- question_id: 84
+  domain: usa
+  question: 2020 年 2 月美国哪个空间单元的 NDVI 最高？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.ndvi_mean FROM usa_env_metrics_monthly_2020 m
+                    JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE m.year=2020 AND m.month=2 ORDER BY m.ndvi_mean DESC LIMIT 1;
+      output_filename: q84_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Mississippi
+      ndvi_mean: 3946.49321627
+- question_id: 85
+  domain: usa
+  question: 2020 年 11 月美国哪个空间单元的 XCO2 最低？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.xco2_mean FROM usa_env_metrics_monthly_2020 m
+                    JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE m.year=2020 AND m.month=11 ORDER BY m.xco2_mean ASC LIMIT 1;
+      output_filename: q85_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Alaska
+      xco2_mean: 411.42161327
+- question_id: 86
+  domain: usa
+  question: 2010 年美国水体占比最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion FROM usa_landcover_annual_proportion l
+                    JOIN usa_spatial_base s ON l.asdf_id=s.asdf_id
+                    WHERE l.year=2010 AND l.category='water'
+                    ORDER BY l.proportion DESC LIMIT 1;
+      output_filename: q86_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: American Samoa
+      proportion: 0.8282758621
+- question_id: 87
+  domain: usa
+  question: 列出 2011 年草地占比最高的 3 个美国空间单元。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion FROM usa_landcover_annual_proportion l
+                    JOIN usa_spatial_base s ON l.asdf_id=s.asdf_id
+                    WHERE l.year=2011 AND l.category='grasslands'
+                    ORDER BY l.proportion DESC LIMIT 3;
+      output_filename: q87_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Wyoming
+      proportion: 0.8945284811
+    - shapeName: Colorado
+      proportion: 0.7488716795
+    - shapeName: Montana
+      proportion: 0.7412331962
+- question_id: 88
+  domain: usa
+  question: 美国平均坡度最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.slope_mean FROM usa_static st
+                    JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id
+                    ORDER BY st.slope_mean DESC LIMIT 1;
+      output_filename: q88_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: American Samoa
+      slope_mean: 8.540696057
+- question_id: 89
+  domain: usa
+  question: 美国平均海拔最低的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.elevation_mean FROM usa_static st
+                    JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id
+                    ORDER BY st.elevation_mean ASC LIMIT 1;
+      output_filename: q89_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Delaware
+      elevation_mean: 16.30828795
+- question_id: 90
+  domain: usa
+  question: 美国陆上油气储藏面积比例最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.onshore_petroleum_mean FROM usa_static st
+                    JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id
+                    ORDER BY st.onshore_petroleum_mean DESC LIMIT 1;
+      output_filename: q90_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Wyoming
+      onshore_petroleum_mean: 0.808446871
+- question_id: 91
+  domain: usa
+  question: 2013 年美国总降水量最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.precip_sum FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2013 ORDER BY e.precip_sum DESC LIMIT 1;
+      output_filename: q91_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Alaska
+      precip_sum: 577691.5369887721
+- question_id: 92
+  domain: usa
+  question: 2014 年美国 NDVI 最低的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.ndvi_mean FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2014 ORDER BY e.ndvi_mean ASC LIMIT 1;
+      output_filename: q92_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Commonwealth of the Northern Mariana Islands
+      ndvi_mean: 311.599473375
+- question_id: 93
+  domain: usa
+  question: 2020 年 3 月美国 PM2.5 最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.pm25_mean FROM usa_env_metrics_monthly_2020 m
+                    JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE m.year=2020 AND m.month=3 ORDER BY m.pm25_mean DESC LIMIT 1;
+      output_filename: q93_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Florida
+      pm25_mean: 7.8281229743
+- question_id: 94
+  domain: usa
+  question: 2020 年 9 月美国夜间地表温度最高的空间单元是哪个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", m.lst_night_mean FROM usa_env_metrics_monthly_2020 m
+                    JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE m.year=2020 AND m.month=9 ORDER BY m.lst_night_mean DESC LIMIT 1;
+      output_filename: q94_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: United States Virgin Islands
+      lst_night_mean: 296.375498405
+- question_id: 95
+  domain: usa
+  question: 2012 年美国有多少个空间单元的城市建设用地占比超过 5%？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS unit_count FROM usa_landcover_annual_proportion
+                    WHERE year=2012 AND category='urban_and_builtup' AND proportion>0.05;
+      output_filename: q95_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - unit_count: 8
+- question_id: 96
+  domain: usa
+  question: 2010 年美国有多少个空间单元的农用地占比低于 1%？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS unit_count FROM usa_landcover_annual_proportion
+                    WHERE year=2010 AND category='croplands' AND proportion<0.01;
+      output_filename: q96_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - unit_count: 10
+- question_id: 97
+  domain: usa
+  question: 德克萨斯州 2015 年的年均 PM2.5 是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT e.pm25_mean FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE s."shapeName"='Texas' AND e.year=2015;
+      output_filename: q97_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - pm25_mean: 6.5328814478
+- question_id: 98
+  domain: usa
+  question: 加利福尼亚州 2011 年的农用地占比是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT l.proportion FROM usa_landcover_annual_proportion l
+                    JOIN usa_spatial_base s ON l.asdf_id=s.asdf_id
+                    WHERE s."shapeName"='California' AND l.year=2011 AND l.category='croplands';
+      output_filename: q98_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - proportion: 0.0984818048
+- question_id: 99
+  domain: usa
+  question: 纽约州 2020 年 12 月的平均夜间灯光指数是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT m.ntl_mean FROM usa_env_metrics_monthly_2020 m
+                    JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE s."shapeName"='New York' AND m.year=2020 AND m.month=12;
+      output_filename: q99_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - ntl_mean: 2.4659999998
+- question_id: 100
+  domain: usa
+  question: 佛罗里达州的平均海拔和平均风速分别是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT st.elevation_mean, st.windspeed_mean FROM usa_static st
+                    JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id
+                    WHERE s."shapeName"='Florida';
+      output_filename: q100_usa_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - elevation_mean: 23.37154693
+      windspeed_mean: 3.803755925
+- question_id: 101
+  domain: usa
+  question: 找出 2010—2015 年 PM2.5 降幅最大的 3 个美国空间单元，并给出降幅。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", (e10.pm25_mean-e15.pm25_mean) AS pm25_decrease
+                    FROM usa_spatial_base s
+                    JOIN usa_env_metrics_annual e10 ON s.asdf_id=e10.asdf_id AND e10.year=2010
+                    JOIN usa_env_metrics_annual e15 ON s.asdf_id=e15.asdf_id AND e15.year=2015
+                    ORDER BY pm25_decrease DESC LIMIT 3;
+      output_filename: q101_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Indiana
+      pm25_decrease: 3.0785896591
+    - shapeName: Kentucky
+      pm25_decrease: 2.9465382314
+    - shapeName: Georgia
+      pm25_decrease: 2.9380801073
+- question_id: 102
+  domain: usa
+  question: 按 2020 年逐月白天地表温度的极差，列出极差最大的 5 个美国空间单元。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", MAX(m.lst_day_mean)-MIN(m.lst_day_mean) AS annual_range
+                    FROM usa_env_metrics_monthly_2020 m JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                    WHERE m.year=2020 GROUP BY s."shapeName"
+                    ORDER BY annual_range DESC LIMIT 5;
+      output_filename: q102_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Wyoming
+      annual_range: 44.286523437
+    - shapeName: Nevada
+      annual_range: 43.600615241
+    - shapeName: Utah
+      annual_range: 43.362846913
+    - shapeName: North Dakota
+      annual_range: 42.458447942
+    - shapeName: Alaska
+      annual_range: 41.38569762
+- question_id: 103
+  domain: usa
+  question: 列出 2012 年人口高于全美空间单元平均值、但 NDVI 低于平均值的前 5 个空间单元（按人口降序）。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.pop_sum, e.ndvi_mean FROM usa_env_metrics_annual e
+                    JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    WHERE e.year=2012
+                      AND e.pop_sum>(SELECT AVG(pop_sum) FROM usa_env_metrics_annual WHERE year=2012)
+                      AND e.ndvi_mean<(SELECT AVG(ndvi_mean) FROM usa_env_metrics_annual WHERE year=2012)
+                    ORDER BY e.pop_sum DESC LIMIT 5;
+      output_filename: q103_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: California
+      pop_sum: 38033559.7178
+      ndvi_mean: 4049.41574978
+    - shapeName: Texas
+      pop_sum: 26171119.7969
+      ndvi_mean: 4057.22830698
+    - shapeName: Michigan
+      pop_sum: 9883651.26743
+      ndvi_mean: 3540.77080247
+    - shapeName: Arizona
+      pop_sum: 6692817.68629
+      ndvi_mean: 2696.17962965
+- question_id: 104
+  domain: usa
+  question: 找出 2010—2012 年农用地占比增幅最大的 5 个美国空间单元。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l12.proportion-l10.proportion AS cropland_increase
+                    FROM usa_spatial_base s
+                    JOIN usa_landcover_annual_proportion l10 ON s.asdf_id=l10.asdf_id
+                      AND l10.year=2010 AND l10.category='croplands'
+                    JOIN usa_landcover_annual_proportion l12 ON s.asdf_id=l12.asdf_id
+                      AND l12.year=2012 AND l12.category='croplands'
+                    ORDER BY cropland_increase DESC LIMIT 5;
+      output_filename: q104_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Missouri
+      cropland_increase: 0.0558237165
+    - shapeName: North Dakota
+      cropland_increase: 0.0156565512
+    - shapeName: Illinois
+      cropland_increase: 0.0137648789
+    - shapeName: Iowa
+      cropland_increase: 0.0107386548
+    - shapeName: Minnesota
+      cropland_increase: 0.0106408231
+- question_id: 105
+  domain: usa
+  question: 统计 2010—2015 年每年的美国空间单元平均 PM2.5，并按年份排序。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT year, AVG(pm25_mean) AS avg_pm25 FROM usa_env_metrics_annual
+                    GROUP BY year ORDER BY year;
+      output_filename: q105_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - year: 2010
+      avg_pm25: 7.5203242938
+    - year: 2011
+      avg_pm25: 7.477813448
+    - year: 2012
+      avg_pm25: 7.1524209022
+    - year: 2013
+      avg_pm25: 6.6915558123
+    - year: 2014
+      avg_pm25: 6.6215904329
+    - year: 2015
+      avg_pm25: 6.5480446814
+- question_id: 106
+  domain: usa
+  question: 找出 2020 年月均 PM2.5 高于其 2015 年年均 PM2.5 的空间单元，并按差值列出前 5 个。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", AVG(m.pm25_mean)-e.pm25_mean AS pm25_difference
+                    FROM usa_spatial_base s
+                    JOIN usa_env_metrics_monthly_2020 m ON s.asdf_id=m.asdf_id AND m.year=2020
+                    JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id AND e.year=2015
+                    GROUP BY s."shapeName", e.pm25_mean
+                    HAVING AVG(m.pm25_mean)>e.pm25_mean
+                    ORDER BY pm25_difference DESC LIMIT 5;
+      output_filename: q106_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: California
+      pm25_difference: 3.5460492984
+    - shapeName: Oregon
+      pm25_difference: 1.7529316956
+    - shapeName: Colorado
+      pm25_difference: 0.9914500689
+    - shapeName: Puerto Rico
+      pm25_difference: 0.9858365544
+    - shapeName: Nevada
+      pm25_difference: 0.867287306
+- question_id: 107
+  domain: usa
+  question: 找出 2020 年 1 月到 4 月 NDVI 增幅最大的 5 个美国空间单元。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", apr.ndvi_mean-jan.ndvi_mean AS ndvi_increase
+                    FROM usa_spatial_base s
+                    JOIN usa_env_metrics_monthly_2020 jan ON s.asdf_id=jan.asdf_id AND jan.year=2020 AND jan.month=1
+                    JOIN usa_env_metrics_monthly_2020 apr ON s.asdf_id=apr.asdf_id AND apr.year=2020 AND apr.month=4
+                    ORDER BY ndvi_increase DESC LIMIT 5;
+      output_filename: q107_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Washington
+      ndvi_increase: 4615.8515572605
+    - shapeName: Mississippi
+      ndvi_increase: 4451.1650620302
+    - shapeName: Louisiana
+      ndvi_increase: 4355.3209305792
+    - shapeName: Missouri
+      ndvi_increase: 4089.9266621371
+    - shapeName: Vermont
+      ndvi_increase: 4041.2963324894
+- question_id: 108
+  domain: usa
+  question: 列出 2012 年城市建设用地与水体占比之和最高的 5 个美国空间单元。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", u.proportion+w.proportion AS combined_proportion
+                    FROM usa_spatial_base s
+                    JOIN usa_landcover_annual_proportion u ON s.asdf_id=u.asdf_id
+                      AND u.year=2012 AND u.category='urban_and_builtup'
+                    JOIN usa_landcover_annual_proportion w ON s.asdf_id=w.asdf_id
+                      AND w.year=2012 AND w.category='water'
+                    ORDER BY combined_proportion DESC LIMIT 5;
+      output_filename: q108_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: District of Columbia
+      combined_proportion: 0.8530805687
+    - shapeName: American Samoa
+      combined_proportion: 0.8268965517
+    - shapeName: United States Virgin Islands
+      combined_proportion: 0.7812667453
+    - shapeName: Hawaii
+      combined_proportion: 0.4255687091
+    - shapeName: Michigan
+      combined_proportion: 0.4213451705
+- question_id: 109
+  domain: usa
+  question: 列出光伏潜力高于平均值、但平均风速低于平均值的美国空间单元，按光伏潜力取前 5 个。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.pvout_mean, st.windspeed_mean
+                    FROM usa_static st JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id
+                    WHERE st.pvout_mean>(SELECT AVG(pvout_mean) FROM usa_static)
+                      AND st.windspeed_mean<(SELECT AVG(windspeed_mean) FROM usa_static)
+                    ORDER BY st.pvout_mean DESC LIMIT 5;
+      output_filename: q109_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: New Mexico
+      pvout_mean: 5.133671262
+      windspeed_mean: 4.728819957
+    - shapeName: Arizona
+      pvout_mean: 5.123029691
+      windspeed_mean: 3.869285121
+    - shapeName: California
+      pvout_mean: 4.897101583
+      windspeed_mean: 3.881146241
+    - shapeName: Nevada
+      pvout_mean: 4.877669579
+      windspeed_mean: 4.330118428
+    - shapeName: Utah
+      pvout_mean: 4.72636416
+      windspeed_mean: 4.098809927
+- question_id: 110
+  domain: usa
+  question: 按 2010—2015 年人口复合年增长率列出增长最快的 3 个美国空间单元。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",
+                           POWER(e15.pop_sum/NULLIF(e10.pop_sum,0),1.0/5)-1 AS population_cagr
+                    FROM usa_spatial_base s
+                    JOIN usa_env_metrics_annual e10 ON s.asdf_id=e10.asdf_id AND e10.year=2010
+                    JOIN usa_env_metrics_annual e15 ON s.asdf_id=e15.asdf_id AND e15.year=2015
+                    WHERE e10.pop_sum>0 ORDER BY population_cagr DESC LIMIT 3;
+      output_filename: q110_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Nevada
+      population_cagr: 0.0311906533
+    - shapeName: Arizona
+      population_cagr: 0.0235331085
+    - shapeName: Utah
+      population_cagr: 0.022292314
+- question_id: 111
+  domain: usa
+  question: 2020 年哪个月份的美国空间单元平均 XCO2 最高？
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT month, AVG(xco2_mean) AS avg_xco2 FROM usa_env_metrics_monthly_2020
+                    WHERE year=2020 GROUP BY month ORDER BY avg_xco2 DESC LIMIT 1;
+      output_filename: q111_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - month: 4
+      avg_xco2: 415.4945267216
+- question_id: 112
+  domain: usa
+  question: 统计 2012 年各美国空间单元占比大于 0 的土地覆盖类别数，并列出类别数最多的 5 个。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", COUNT(*) AS positive_category_count
+                    FROM usa_landcover_annual_proportion l JOIN usa_spatial_base s ON l.asdf_id=s.asdf_id
+                    WHERE l.year=2012 AND l.proportion>0
+                    GROUP BY s."shapeName" ORDER BY positive_category_count DESC, s."shapeName" LIMIT 5;
+      output_filename: q112_usa_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Alaska
+      positive_category_count: 17
+    - shapeName: Arizona
+      positive_category_count: 17
+    - shapeName: Arkansas
+      positive_category_count: 17
+    - shapeName: California
+      positive_category_count: 17
+    - shapeName: Florida
+      positive_category_count: 17
+    tie_candidates:
+    - shapeName: Alaska
+      positive_category_count: 17
+    - shapeName: Arizona
+      positive_category_count: 17
+    - shapeName: Arkansas
+      positive_category_count: 17
+    - shapeName: California
+      positive_category_count: 17
+    - shapeName: Florida
+      positive_category_count: 17
+    - shapeName: Georgia
+      positive_category_count: 17
+    - shapeName: Hawaii
+      positive_category_count: 17
+    - shapeName: Illinois
+      positive_category_count: 17
+    - shapeName: Indiana
+      positive_category_count: 17
+    - shapeName: Iowa
+      positive_category_count: 17
+    - shapeName: Kansas
+      positive_category_count: 17
+    - shapeName: Kentucky
+      positive_category_count: 17
+    - shapeName: Louisiana
+      positive_category_count: 17
+    - shapeName: Maryland
+      positive_category_count: 17
+    - shapeName: Michigan
+      positive_category_count: 17
+    - shapeName: Minnesota
+      positive_category_count: 17
+    - shapeName: Mississippi
+      positive_category_count: 17
+    - shapeName: Missouri
+      positive_category_count: 17
+    - shapeName: Nebraska
+      positive_category_count: 17
+    - shapeName: Nevada
+      positive_category_count: 17
+    - shapeName: New Jersey
+      positive_category_count: 17
+    - shapeName: New Mexico
+      positive_category_count: 17
+    - shapeName: New York
+      positive_category_count: 17
+    - shapeName: North Carolina
+      positive_category_count: 17
+    - shapeName: North Dakota
+      positive_category_count: 17
+    - shapeName: Ohio
+      positive_category_count: 17
+    - shapeName: Oklahoma
+      positive_category_count: 17
+    - shapeName: Oregon
+      positive_category_count: 17
+    - shapeName: Pennsylvania
+      positive_category_count: 17
+    - shapeName: South Carolina
+      positive_category_count: 17
+    - shapeName: Tennessee
+      positive_category_count: 17
+    - shapeName: Texas
+      positive_category_count: 17
+    - shapeName: Utah
+      positive_category_count: 17
+    - shapeName: Virginia
+      positive_category_count: 17
+    - shapeName: Washington
+      positive_category_count: 17
+    - shapeName: Wisconsin
+      positive_category_count: 17
+- question_id: 113
+  domain: usa
+  question: 提取美国全部空间单元的平均海拔和 2015 年平均气温，用 Python 计算 Spearman 相关系数和 P 值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.elevation_mean, e.air_temp_mean
+                       FROM usa_spatial_base s JOIN usa_static st ON s.asdf_id=st.asdf_id
+                       JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id
+                       WHERE e.year=2015;
+      output_filename: q113_elevation_temp.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import spearmanr
+    df = pd.read_json("q113_elevation_temp.json").dropna()
+    rho, p = spearmanr(df["elevation_mean"], df["air_temp_mean"])
+    payload = {"spearman_rho": float(rho), "p_value": float(p)}
+    answer_text = f"Spearman rho={rho:.6f}, p={p:.6g}"
 
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      spearman_rho: -0.45413533834586467
+      p_value: 0.0004386770411158321
+- question_id: 114
+  domain: usa
+  question: 按平均风速中位数把美国空间单元分成高风速组和低风速组，用 Mann–Whitney U 检验比较两组 2015 年 PM2.5。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.windspeed_mean, e.pm25_mean
+                       FROM usa_spatial_base s JOIN usa_static st ON s.asdf_id=st.asdf_id
+                       JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id
+                       WHERE e.year=2015;
+      output_filename: q114_wind_pm25.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import mannwhitneyu
+    df = pd.read_json("q114_wind_pm25.json").dropna()
+    median = df["windspeed_mean"].median()
+    low = df.loc[df["windspeed_mean"] <= median, "pm25_mean"]
+    high = df.loc[df["windspeed_mean"] > median, "pm25_mean"]
+    u, p = mannwhitneyu(high, low, alternative="two-sided")
+    payload = {"wind_median": float(median), "u_statistic": float(u), "p_value": float(p)}
+    answer_text = f"U={u:.3f}, p={p:.6g}"
 
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      wind_median: 4.6979518465000005
+      u_statistic: 247.0
+      p_value: 0.01788946180603432
+- question_id: 115
+  domain: usa
+  question: 提取加州 2020 年逐月 NDVI，用月份作为自变量做一元线性回归，输出斜率和 R-squared。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT m.month, m.ndvi_mean FROM usa_env_metrics_monthly_2020 m
+                       JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                       WHERE s."shapeName"='California' AND m.year=2020 ORDER BY m.month;
+      output_filename: q115_california_ndvi.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import linregress
+    df = pd.read_json("q115_california_ndvi.json").dropna()
+    r = linregress(df["month"], df["ndvi_mean"])
+    payload = {"slope": float(r.slope), "r_squared": float(r.rvalue ** 2)}
+    answer_text = f"slope={r.slope:.6f}, R²={r.rvalue ** 2:.6f}"
 
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      slope: -16.193305503587414
+      r_squared: 0.0018771887708951172
+- question_id: 116
+  domain: usa
+  question: 提取德克萨斯州 2010—2015 年年均 PM2.5，用总体标准差做 Z-Score，输出 Z-Score 最高的年份和数值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT e.year, e.pm25_mean FROM usa_env_metrics_annual e
+                       JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                       WHERE s."shapeName"='Texas' ORDER BY e.year;
+      output_filename: q116_texas_pm25.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    df = pd.read_json("q116_texas_pm25.json").dropna()
+    df["pm25_z"] = StandardScaler().fit_transform(df[["pm25_mean"]]).ravel()
+    row = df.loc[df["pm25_z"].idxmax()]
+    payload = {"year": int(row["year"]), "pm25_z": float(row["pm25_z"])}
+    answer_text = f"最高 Z-Score 出现在 {int(row['year'])} 年。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      year: 2011
+      pm25_z: 1.9863160641733164
+- question_id: 117
+  domain: usa
+  question: 提取 2012 年美国各空间单元农用地占比，用 1.5 倍 IQR 上界识别异常高值，并输出空间单元名称。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", l.proportion FROM usa_landcover_annual_proportion l
+                       JOIN usa_spatial_base s ON l.asdf_id=s.asdf_id
+                       WHERE l.year=2012 AND l.category='croplands';
+      output_filename: q117_cropland_iqr.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    df = pd.read_json("q117_cropland_iqr.json").dropna()
+    q1 = df["proportion"].quantile(0.25)
+    q3 = df["proportion"].quantile(0.75)
+    upper = q3 + 1.5 * (q3 - q1)
+    names = sorted(df.loc[df["proportion"] > upper, "shapeName"].tolist())
+    payload = {"upper_bound": float(upper), "outlier_units": names}
+    answer_text = f"共识别 {len(names)} 个异常高值空间单元。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      upper_bound: 0.3419034354125
+      outlier_units:
+      - Illinois
+      - Indiana
+      - Iowa
+      - Minnesota
+      - Nebraska
+      - North Dakota
+      - South Dakota
+- question_id: 118
+  domain: usa
+  question: 对美国空间单元的光伏潜力、风速、坡度、海拔四项静态指标标准化后做 PCA，输出前两个主成分的方差解释率。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT pvout_mean, windspeed_mean, slope_mean, elevation_mean FROM usa_static;
+      output_filename: q118_static_pca.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA
+    df = pd.read_json("q118_static_pca.json").dropna()
+    x = StandardScaler().fit_transform(df)
+    ratios = PCA(n_components=2).fit(x).explained_variance_ratio_
+    payload = {"pc1_ratio": float(ratios[0]), "pc2_ratio": float(ratios[1])}
+    answer_text = f"PC1={ratios[0]:.6f}, PC2={ratios[1]:.6f}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      pc1_ratio: 0.4067112258515501
+      pc2_ratio: 0.28004974952085326
+- question_id: 119
+  domain: usa
+  question: 提取加州 2020 年逐月 PM2.5，按月份排序后计算一阶自相关系数。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT m.month, m.pm25_mean FROM usa_env_metrics_monthly_2020 m
+                       JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                       WHERE s."shapeName"='California' AND m.year=2020 ORDER BY m.month;
+      output_filename: q119_california_pm25.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    df = pd.read_json("q119_california_pm25.json").dropna().sort_values("month")
+    value = df["pm25_mean"].autocorr(lag=1)
+    payload = {"lag1_autocorrelation": float(value)}
+    answer_text = f"一阶自相关系数为 {value:.6f}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      lag1_autocorrelation: 0.43006706676308915
+- question_id: 120
+  domain: usa
+  question: 提取美国各空间单元 2010—2015 年人口，用样本标准差除以均值计算人口变异系数，输出最高的 3 个空间单元。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.year, e.pop_sum FROM usa_env_metrics_annual e
+                       JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id ORDER BY s."shapeName", e.year;
+      output_filename: q120_population_cv.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    df = pd.read_json("q120_population_cv.json").dropna()
+    stats = df.groupby("shapeName")["pop_sum"].agg(["mean", "std"])
+    stats["cv"] = stats["std"] / stats["mean"]
+    top = stats.sort_values("cv", ascending=False).head(3)
+    rows = [{"shapeName": str(idx), "cv": float(row["cv"])} for idx, row in top.iterrows()]
+    payload = {"top_3_population_cv": rows}
+    answer_text = "已输出人口变异系数最高的 3 个空间单元。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_population_cv:
+      - shapeName: Nevada
+        cv: 0.05744970236695638
+      - shapeName: Commonwealth of the Northern Mariana Islands
+        cv: 0.0466956673473989
+      - shapeName: Arizona
+        cv: 0.04352273083859398
+- question_id: 121
+  domain: usa
+  question: 找出 2013、2014、2015 年 PM2.5 连续下降的美国空间单元。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" FROM usa_spatial_base s
+                    JOIN usa_env_metrics_annual a ON s.asdf_id=a.asdf_id AND a.year=2013
+                    JOIN usa_env_metrics_annual b ON s.asdf_id=b.asdf_id AND b.year=2014
+                    JOIN usa_env_metrics_annual c ON s.asdf_id=c.asdf_id AND c.year=2015
+                    WHERE a.pm25_mean>b.pm25_mean AND b.pm25_mean>c.pm25_mean
+                    ORDER BY s."shapeName";
+      output_filename: q121_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Arizona
+    - shapeName: Arkansas
+    - shapeName: California
+    - shapeName: Colorado
+    - shapeName: Iowa
+    - shapeName: Kansas
+    - shapeName: Minnesota
+    - shapeName: Nebraska
+    - shapeName: New Jersey
+    - shapeName: New Mexico
+    - shapeName: Oklahoma
+    - shapeName: Tennessee
+    - shapeName: West Virginia
+- question_id: 122
+  domain: usa
+  question: 对 2012 年 PM2.5 和城市建设用地占比分别按升序排名，计算两项排名均值，列出综合低值排名最靠前的 5 个美国空间单元。
+  difficulty: hard
+  requires_sandbox: false
+  answer_fields:
+  - shapeName
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH base AS (
+                      SELECT s."shapeName", e.pm25_mean, l.proportion AS urban_prop
+                      FROM usa_spatial_base s JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id AND e.year=2012
+                      JOIN usa_landcover_annual_proportion l ON s.asdf_id=l.asdf_id
+                        AND l.year=2012 AND l.category='urban_and_builtup'
+                    ), ranked AS (
+                      SELECT *, RANK() OVER(ORDER BY pm25_mean) AS pm_rank,
+                                RANK() OVER(ORDER BY urban_prop) AS urban_rank FROM base
+                    )
+                    SELECT "shapeName", pm_rank, urban_rank, (pm_rank+urban_rank)/2.0 AS mean_rank
+                    FROM ranked ORDER BY mean_rank, "shapeName" LIMIT 5;
+      output_filename: q122_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Commonwealth of the Northern Mariana Islands
+      pm_rank: 1
+      urban_rank: 1
+      mean_rank: 1.0
+    - shapeName: American Samoa
+      pm_rank: 2
+      urban_rank: 1
+      mean_rank: 1.5
+    - shapeName: Guam
+      pm_rank: 3
+      urban_rank: 1
+      mean_rank: 2.0
+    - shapeName: Alaska
+      pm_rank: 4
+      urban_rank: 4
+      mean_rank: 4.0
+    - shapeName: New Mexico
+      pm_rank: 7
+      urban_rank: 9
+      mean_rank: 8.0
+- question_id: 123
+  domain: usa
+  question: 对每个美国空间单元计算 2020 年最热月与最冷月白天地表温度差，列出温差最大的 3 个。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH r AS (
+                      SELECT s."shapeName", MAX(m.lst_day_mean)-MIN(m.lst_day_mean) AS temp_amplitude
+                      FROM usa_env_metrics_monthly_2020 m JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                      WHERE m.year=2020 GROUP BY s."shapeName"
+                    ) SELECT * FROM r ORDER BY temp_amplitude DESC LIMIT 3;
+      output_filename: q123_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Wyoming
+      temp_amplitude: 44.286523437
+    - shapeName: Nevada
+      temp_amplitude: 43.600615241
+    - shapeName: Utah
+      temp_amplitude: 43.362846913
+- question_id: 124
+  domain: usa
+  question: 把混合林、常绿阔叶林、常绿针叶林、落叶阔叶林、落叶针叶林占比之和定义为森林占比，列出 2010—2012 年森林占比增幅最大的 5 个美国空间单元。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH f AS (
+                      SELECT asdf_id, year, SUM(proportion) AS forest_prop
+                      FROM usa_landcover_annual_proportion
+                      WHERE year IN (2010,2012) AND category IN
+                        ('mixed_forest','evergreen_broadleaf_forest','evergreen_needleleaf_forest',
+                         'deciduous_broadleaf_forest','deciduous_needleleaf_forest')
+                      GROUP BY asdf_id, year
+                    )
+                    SELECT s."shapeName", f12.forest_prop-f10.forest_prop AS forest_increase
+                    FROM usa_spatial_base s JOIN f f10 ON s.asdf_id=f10.asdf_id AND f10.year=2010
+                    JOIN f f12 ON s.asdf_id=f12.asdf_id AND f12.year=2012
+                    ORDER BY forest_increase DESC LIMIT 5;
+      output_filename: q124_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Wisconsin
+      forest_increase: 0.0457241109
+    - shapeName: Vermont
+      forest_increase: 0.0429894713
+    - shapeName: Florida
+      forest_increase: 0.0416267646
+    - shapeName: Puerto Rico
+      forest_increase: 0.039590826
+    - shapeName: Minnesota
+      forest_increase: 0.0325013913
+- question_id: 125
+  domain: usa
+  question: 找出 2015 年气温高于平均、PM2.5 低于平均且光伏潜力高于平均的美国空间单元。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", e.air_temp_mean, e.pm25_mean, st.pvout_mean
+                    FROM usa_spatial_base s JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id
+                    JOIN usa_static st ON s.asdf_id=st.asdf_id
+                    WHERE e.year=2015
+                      AND e.air_temp_mean>(SELECT AVG(air_temp_mean) FROM usa_env_metrics_annual WHERE year=2015)
+                      AND e.pm25_mean<(SELECT AVG(pm25_mean) FROM usa_env_metrics_annual WHERE year=2015)
+                      AND st.pvout_mean>(SELECT AVG(pvout_mean) FROM usa_static)
+                    ORDER BY e.air_temp_mean DESC;
+      output_filename: q125_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Puerto Rico
+      air_temp_mean: 24.5539548093
+      pm25_mean: 6.1664317341
+      pvout_mean: 4.411849294
+    - shapeName: Texas
+      air_temp_mean: 18.4946037925
+      pm25_mean: 6.5328814478
+      pvout_mean: 4.453452563
+    - shapeName: Guam
+      air_temp_mean: 17.4775557294
+      pm25_mean: 4.9173889514
+      pvout_mean: 4.447935191
+    - shapeName: Arizona
+      air_temp_mean: 16.4925065712
+      pm25_mean: 4.8428613951
+      pvout_mean: 5.123029691
+    - shapeName: Oklahoma
+      air_temp_mean: 15.9099027712
+      pm25_mean: 6.1877838253
+      pvout_mean: 4.337357199
+    - shapeName: Commonwealth of the Northern Mariana Islands
+      air_temp_mean: 15.8137340903
+      pm25_mean: 4.0441861378
+      pvout_mean: 4.578489334
+    - shapeName: Hawaii
+      air_temp_mean: 14.4554006886
+      pm25_mean: 4.8651516888
+      pvout_mean: 4.401346001
+    - shapeName: American Samoa
+      air_temp_mean: 13.5200059813
+      pm25_mean: 4.8882576074
+      pvout_mean: 4.130595281
+    - shapeName: Kansas
+      air_temp_mean: 13.2459235931
+      pm25_mean: 5.6959359366
+      pvout_mean: 4.373043281
+    - shapeName: New Mexico
+      air_temp_mean: 12.5163918488
+      pm25_mean: 4.3968584546
+      pvout_mean: 5.133671262
+- question_id: 126
+  domain: usa
+  question: 找出城市建设用地占比在 2010、2011、2012 年连续增长的美国空间单元。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName" FROM usa_spatial_base s
+                    JOIN usa_landcover_annual_proportion a ON s.asdf_id=a.asdf_id AND a.year=2010 AND a.category='urban_and_builtup'
+                    JOIN usa_landcover_annual_proportion b ON s.asdf_id=b.asdf_id AND b.year=2011 AND b.category='urban_and_builtup'
+                    JOIN usa_landcover_annual_proportion c ON s.asdf_id=c.asdf_id AND c.year=2012 AND c.category='urban_and_builtup'
+                    WHERE a.proportion<b.proportion AND b.proportion<c.proportion ORDER BY s."shapeName";
+      output_filename: q126_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: Iowa
+    - shapeName: Maryland
+    - shapeName: Massachusetts
+    - shapeName: Wisconsin
+- question_id: 127
+  domain: usa
+  question: 排除 fill_value 和 unclassified 后，2012 年全美空间单元平均占比最高的土地覆盖类别是什么？
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT category, AVG(proportion) AS avg_proportion
+                    FROM usa_landcover_annual_proportion
+                    WHERE year=2012 AND category NOT IN ('fill_value','unclassified')
+                    GROUP BY category ORDER BY avg_proportion DESC LIMIT 1;
+      output_filename: q127_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - category: grasslands
+      avg_proportion: 0.1610393408
+- question_id: 128
+  domain: usa
+  question: 分别计算每个美国空间单元 2010—2015 年 PM2.5 与 NDVI 的 Pearson 相关系数，列出绝对相关性最高的 3 个。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", CORR(e.pm25_mean,e.ndvi_mean) AS correlation
+                    FROM usa_env_metrics_annual e JOIN usa_spatial_base s ON e.asdf_id=s.asdf_id
+                    GROUP BY s."shapeName" HAVING COUNT(*)=6
+                    ORDER BY ABS(CORR(e.pm25_mean,e.ndvi_mean)) DESC LIMIT 3;
+      output_filename: q128_usa_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - shapeName: New Mexico
+      correlation: -0.9414219718
+    - shapeName: Montana
+      correlation: -0.9402885318
+    - shapeName: Ohio
+      correlation: 0.7581553977
+- question_id: 129
+  domain: usa
+  question: 将美国空间单元的光伏潜力、风速、坡度和海拔做 Z-Score 标准化，再用 K-Means（k=4、random_state=42、n_init=10）聚类，输出每类数量。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName", st.pvout_mean, st.windspeed_mean, st.slope_mean, st.elevation_mean
+                              FROM usa_static st JOIN usa_spatial_base s ON st.asdf_id=s.asdf_id;
+      output_filename: q129_static_kmeans.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    df = pd.read_json("q129_static_kmeans.json").dropna()
+    cols = ["pvout_mean","windspeed_mean","slope_mean","elevation_mean"]
+    x = StandardScaler().fit_transform(df[cols])
+    labels = KMeans(n_clusters=4, random_state=42, n_init=10).fit_predict(x)
+    counts = pd.Series(labels).value_counts().sort_index()
+    payload = {"cluster_counts": {str(int(k)): int(v) for k, v in counts.items()}}
+    answer_text = "已完成 4 类聚类并统计每类数量。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cluster_counts:
+        '0': 23
+        '1': 16
+        '2': 8
+        '3': 9
+- question_id: 130
+  domain: usa
+  question: 用美国空间单元 2015 年人口、光伏潜力、风速、坡度和海拔预测 PM2.5；自变量先做 Z-Score 标准化，输出 R-squared 和绝对标准化系数最大的特征。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT e.pm25_mean,e.pop_sum,st.pvout_mean,st.windspeed_mean,st.slope_mean,st.elevation_mean
+                              FROM usa_env_metrics_annual e JOIN usa_static st ON e.asdf_id=st.asdf_id
+                              WHERE e.year=2015;
+      output_filename: q130_pm25_regression.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score
+    df = pd.read_json("q130_pm25_regression.json").dropna()
+    cols = ["pop_sum","pvout_mean","windspeed_mean","slope_mean","elevation_mean"]
+    x = StandardScaler().fit_transform(df[cols])
+    y = df["pm25_mean"]
+    model = LinearRegression().fit(x,y)
+    r2 = r2_score(y,model.predict(x))
+    feature = cols[int(np.argmax(np.abs(model.coef_)))]
+    payload = {"r_squared": float(r2), "most_important_feature": feature}
+    answer_text = f"R²={r2:.6f}，最大标准化系数对应 {feature}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      r_squared: 0.6290369422734874
+      most_important_feature: windspeed_mean
+- question_id: 131
+  domain: usa
+  question: 把美国各空间单元 2020 年 12 个月 PM2.5 序列标准化后做 Ward 层次聚类（4 类），输出每类空间单元数量。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",m.month,m.pm25_mean FROM usa_env_metrics_monthly_2020 m
+                              JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                              WHERE m.year=2020 ORDER BY s."shapeName",m.month;
+      output_filename: q131_monthly_pm25.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import AgglomerativeClustering
+    df = pd.read_json("q131_monthly_pm25.json").dropna()
+    x = df.pivot(index="shapeName",columns="month",values="pm25_mean")
+    labels = AgglomerativeClustering(n_clusters=4, linkage="ward").fit_predict(StandardScaler().fit_transform(x))
+    counts = pd.Series(labels).value_counts().sort_index()
+    payload = {"cluster_counts": {str(int(k)): int(v) for k,v in counts.items()}}
+    answer_text = "已完成 Ward 层次聚类。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cluster_counts:
+        '0': 19
+        '1': 28
+        '2': 1
+        '3': 8
+- question_id: 132
+  domain: usa
+  question: 以等积投影后的州域质心代表位置，计算各美国空间单元质心到加州质心的大地线距离，列出 1000 公里内（不含加州）的空间单元及距离。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT "shapeName",geometry FROM usa_spatial_base;
+      output_filename: q132_state_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    from pyproj import Geod
+    gdf = gpd.read_file("q132_state_geometries.geojson")
+    centers = gdf.to_crs(6933).geometry.centroid.to_crs(4326)
+    cali_idx = gdf.index[gdf["shapeName"]=="California"][0]
+    cali = centers.loc[cali_idx]
+    geod = Geod(ellps="WGS84")
+    rows = []
+    for idx,row in gdf.iterrows():
+        if row["shapeName"]=="California":
+            continue
+        c = centers.loc[idx]
+        km = geod.inv(cali.x,cali.y,c.x,c.y)[2]/1000
+        if km <= 1000:
+            rows.append({"shapeName":str(row["shapeName"]),"distance_km":float(km)})
+    rows.sort(key=lambda x:(x["distance_km"],x["shapeName"]))
+    payload = {"units_within_1000km": rows}
+    answer_text = f"共有 {len(rows)} 个空间单元质心位于 1000 公里内。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      units_within_1000km:
+      - shapeName: Nevada
+        distance_km: 356.77190294619004
+      - shapeName: Utah
+        distance_km: 735.4298776692359
+      - shapeName: Oregon
+        distance_km: 762.5440642647831
+      - shapeName: Arizona
+        distance_km: 783.7490160125312
+      - shapeName: Idaho
+        distance_km: 905.2863962336561
+- question_id: 133
+  domain: usa
+  question: 找出 2015 年 PM2.5 高于当年空间单元平均值的美国空间单元，用 EPSG:6933 计算其州域总面积（平方公里）。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",s.geometry,e.pm25_mean FROM usa_spatial_base s
+                              JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id
+                              WHERE e.year=2015 AND e.pm25_mean>
+                                (SELECT AVG(pm25_mean) FROM usa_env_metrics_annual WHERE year=2015);
+      output_filename: q133_high_pm25_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    gdf = gpd.read_file("q133_high_pm25_geometries.geojson").to_crs(6933)
+    area = gdf.geometry.area.sum()/1e6
+    payload = {"unit_count": int(len(gdf)), "total_area_km2": float(area)}
+    answer_text = f"{len(gdf)} 个空间单元总面积约 {area:.2f} 平方公里。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      unit_count: 28
+      total_area_km2: 2948694.8721543625
+- question_id: 134
+  domain: usa
+  question: 以等积投影后的州域质心代表位置，找出质心距科罗拉多州最近的 5 个美国空间单元，并给出大地线距离。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT "shapeName",geometry FROM usa_spatial_base;
+      output_filename: q134_state_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    from pyproj import Geod
+    gdf = gpd.read_file("q134_state_geometries.geojson")
+    centers = gdf.to_crs(6933).geometry.centroid.to_crs(4326)
+    ref_idx = gdf.index[gdf["shapeName"]=="Colorado"][0]
+    ref = centers.loc[ref_idx]
+    geod = Geod(ellps="WGS84")
+    rows=[]
+    for idx,row in gdf.iterrows():
+        if row["shapeName"]=="Colorado":
+            continue
+        c=centers.loc[idx]
+        km=geod.inv(ref.x,ref.y,c.x,c.y)[2]/1000
+        rows.append({"shapeName":str(row["shapeName"]),"distance_km":float(km)})
+    rows=sorted(rows,key=lambda x:(x["distance_km"],x["shapeName"]))[:5]
+    payload={"nearest_5_units":rows}
+    answer_text="已输出距科罗拉多州质心最近的 5 个空间单元。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      nearest_5_units:
+      - shapeName: Wyoming
+        distance_km: 474.77639496825435
+      - shapeName: New Mexico
+        distance_km: 511.6968452751497
+      - shapeName: Utah
+        distance_km: 530.8009764166785
+      - shapeName: Nebraska
+        distance_km: 564.2142076940127
+      - shapeName: Kansas
+        distance_km: 625.7256637886156
+- question_id: 135
+  domain: usa
+  question: 提取 2012 年城市建设用地占比超过 10% 的美国空间单元，以 EPSG:5070 下的州域质心构造凸包并计算凸包面积。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",s.geometry,l.proportion FROM usa_spatial_base s
+                              JOIN usa_landcover_annual_proportion l ON s.asdf_id=l.asdf_id
+                              WHERE l.year=2012 AND l.category='urban_and_builtup' AND l.proportion>0.1;
+      output_filename: q135_urban_state_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    gdf=gpd.read_file("q135_urban_state_geometries.geojson").to_crs(5070)
+    hull=gdf.geometry.centroid.union_all().convex_hull
+    area=hull.area/1e6
+    payload={"unit_count":int(len(gdf)),"centroid_hull_area_km2":float(area)}
+    answer_text=f"质心凸包面积约 {area:.2f} 平方公里。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      unit_count: 5
+      centroid_hull_area_km2: 17513.599929634263
+- question_id: 136
+  domain: usa
+  question: 对加州 2020 年 12 个月白天与夜间地表温度做配对 t 检验，输出 t 值和 P 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT m.month,m.lst_day_mean,m.lst_night_mean FROM usa_env_metrics_monthly_2020 m
+                              JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id
+                              WHERE s."shapeName"='California' AND m.year=2020 ORDER BY m.month;
+      output_filename: q136_california_day_night.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import ttest_rel
+    df=pd.read_json("q136_california_day_night.json").dropna()
+    t,p=ttest_rel(df["lst_day_mean"],df["lst_night_mean"])
+    payload={"t_statistic":float(t),"p_value":float(p)}
+    answer_text=f"配对 t={t:.6f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      t_statistic: 14.24416076234304
+      p_value: 1.9615515065507443e-08
+- question_id: 137
+  domain: usa
+  question: 提取 2012 年美国空间单元城市建设用地占比和人口，计算 Kendall tau 相关系数与 P 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",l.proportion AS urban_prop,e.pop_sum
+                              FROM usa_spatial_base s JOIN usa_landcover_annual_proportion l ON s.asdf_id=l.asdf_id
+                              JOIN usa_env_metrics_annual e ON s.asdf_id=e.asdf_id
+                              WHERE l.year=2012 AND l.category='urban_and_builtup' AND e.year=2012;
+      output_filename: q137_urban_population.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import kendalltau
+    df=pd.read_json("q137_urban_population.json").dropna()
+    tau,p=kendalltau(df["urban_prop"],df["pop_sum"])
+    payload={"kendall_tau":float(tau),"p_value":float(p)}
+    answer_text=f"Kendall tau={tau:.6f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      kendall_tau: 0.4608386980695181
+      p_value: 5.405197847084226e-07
+- question_id: 138
+  domain: usa
+  question: 对 2015 年美国空间单元平均海拔与平均气温分别标准化，用 Huber 回归拟合，输出斜率与 R-squared。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT st.elevation_mean,e.air_temp_mean FROM usa_static st
+                              JOIN usa_env_metrics_annual e ON st.asdf_id=e.asdf_id WHERE e.year=2015;
+      output_filename: q138_huber_elevation_temp.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import HuberRegressor
+    from sklearn.metrics import r2_score
+    df=pd.read_json("q138_huber_elevation_temp.json").dropna()
+    x=StandardScaler().fit_transform(df[["elevation_mean"]])
+    y=StandardScaler().fit_transform(df[["air_temp_mean"]]).ravel()
+    model=HuberRegressor().fit(x,y)
+    pred=model.predict(x)
+    payload={"standardized_slope":float(model.coef_[0]),"r_squared":float(r2_score(y,pred))}
+    answer_text="已完成标准化 Huber 回归。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      standardized_slope: -0.2649113974331412
+      r_squared: 0.08506126154475291
+- question_id: 139
+  domain: usa
+  question: 对每个美国空间单元计算 2020 年 XCO2 的本空间单元月均值异常，找出绝对异常最大的空间单元—月份组合。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",m.month,m.xco2_mean FROM usa_env_metrics_monthly_2020 m
+                              JOIN usa_spatial_base s ON m.asdf_id=s.asdf_id WHERE m.year=2020;
+      output_filename: q139_xco2_anomaly.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    df=pd.read_json("q139_xco2_anomaly.json").dropna()
+    df["anomaly"]=df["xco2_mean"]-df.groupby("shapeName")["xco2_mean"].transform("mean")
+    row=df.loc[df["anomaly"].abs().idxmax()]
+    payload={"shapeName":str(row["shapeName"]),"month":int(row["month"]),"anomaly":float(row["anomaly"])}
+    answer_text="已找出绝对月异常最大的空间单元—月份组合。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      shapeName: Alaska
+      month: 8
+      anomaly: -5.837361037199969
+- question_id: 140
+  domain: usa
+  question: 筛选平均风速高于中位数的美国空间单元，以 EPSG:5070 下的质心坐标比较 K-Means 的 k=2 与 k=3，输出两者轮廓系数和较优 k（random_state=42、n_init=10）。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s."shapeName",s.geometry,st.windspeed_mean FROM usa_spatial_base s
+                              JOIN usa_static st ON s.asdf_id=st.asdf_id;
+      output_filename: q140_windy_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    gdf=gpd.read_file("q140_windy_geometries.geojson")
+    gdf=gdf[gdf["windspeed_mean"]>gdf["windspeed_mean"].median()].to_crs(5070)
+    c=gdf.geometry.centroid
+    x=list(zip(c.x,c.y))
+    scores={}
+    for k in (2,3):
+        labels=KMeans(n_clusters=k,random_state=42,n_init=10).fit_predict(x)
+        scores[k]=silhouette_score(x,labels)
+    best=max(scores,key=scores.get)
+    payload={"silhouette_k2":float(scores[2]),"silhouette_k3":float(scores[3]),"best_k":int(best)}
+    answer_text=f"较优聚类数为 k={best}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      silhouette_k2: 0.7461601244233128
+      silhouette_k3: 0.7414333929995667
+      best_k: 2
+- question_id: 141
+  domain: zhejiang
+  question: 2012 年浙江省降水量最高的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,precipitation FROM zhejiang_fishnet_dynamic WHERE year=2012 ORDER BY precipitation DESC LIMIT 1;
+      output_filename: q141_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 847
+      precipitation: 2702.4171779141
+- question_id: 142
+  domain: zhejiang
+  question: 2022 年浙江省年平均气温最低的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,temperature FROM zhejiang_fishnet_dynamic WHERE year=2022 ORDER BY temperature ASC LIMIT 1;
+      output_filename: q142_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 1874
+      temperature: 11.93126294
+- question_id: 143
+  domain: zhejiang
+  question: 2017 年浙江省人口最多的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,population FROM zhejiang_fishnet_dynamic WHERE year=2017 ORDER BY population DESC LIMIT 1;
+      output_filename: q143_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8586
+      population: 381026
+- question_id: 144
+  domain: zhejiang
+  question: 2012 年浙江省土壤湿度最高的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,soil_moisture FROM zhejiang_fishnet_dynamic WHERE year=2012 ORDER BY soil_moisture DESC LIMIT 1;
+      output_filename: q144_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 14
+      soil_moisture: 871.1599794239
+- question_id: 145
+  domain: zhejiang
+  question: 2022 年浙江省 EVI 最高的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,evi FROM zhejiang_fishnet_dynamic WHERE year=2022 ORDER BY evi DESC LIMIT 1;
+      output_filename: q145_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 2971
+      evi: 0.5156155993
+- question_id: 146
+  domain: zhejiang
+  question: 2017 年浙江省 LAI 最高的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,lai FROM zhejiang_fishnet_dynamic WHERE year=2017 ORDER BY lai DESC LIMIT 1;
+      output_filename: q146_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 9048
+      lai: 15.4010508475
+- question_id: 147
+  domain: zhejiang
+  question: 2012 年浙江省建成区面积 built_surface 最大的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,built_surface FROM zhejiang_fishnet_dynamic WHERE year=2012 ORDER BY built_surface DESC LIMIT 1;
+      output_filename: q147_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8473
+      built_surface: 3401.8073604335
+- question_id: 148
+  domain: zhejiang
+  question: 浙江省静态表中 ESA 土地覆盖为 Cropland 的网格有多少个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_static WHERE landcover_esa='Cropland';
+      output_filename: q148_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 993
+- question_id: 149
+  domain: zhejiang
+  question: 2017 年浙江省 IGBP 土地覆盖为 Water Bodies 的网格有多少个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic WHERE year=2017 AND landcover_igbp='Water Bodies';
+      output_filename: q149_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 1120
+- question_id: 150
+  domain: zhejiang
+  question: 2022 年浙江省 Dynamic World 分类为 Trees 的网格有多少个？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic WHERE year=2022 AND landcover_dw='Trees';
+      output_filename: q150_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 6689
+- question_id: 151
+  domain: zhejiang
+  question: 列出浙江省坡度最高的 3 个网格 ID 和坡度。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,slope FROM zhejiang_fishnet_static ORDER BY slope DESC LIMIT 3;
+      output_filename: q151_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 3289
+      slope: 34.2999769707
+    - cell_id: 933
+      slope: 33.8453967868
+    - cell_id: 3468
+      slope: 33.8319743
+- question_id: 152
+  domain: zhejiang
+  question: 浙江省海拔最低的网格 ID 和海拔是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,dem FROM zhejiang_fishnet_static ORDER BY dem ASC LIMIT 1;
+      output_filename: q152_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8872
+      dem: -0.9199146332
+- question_id: 153
+  domain: zhejiang
+  question: 查询网格 8586 在 2022 年的人口和夜间灯光。
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,population,nightlight FROM zhejiang_fishnet_dynamic WHERE cell_id=8586 AND year=2022;
+      output_filename: q153_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8586
+      population: 410549
+      nightlight: 46.6611683671
+- question_id: 154
+  domain: zhejiang
+  question: 2012 年浙江省 IGBP 城市建设用地网格的平均夜间灯光是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT AVG(nightlight) AS avg_nightlight FROM zhejiang_fishnet_dynamic WHERE year=2012 AND landcover_igbp='Urban and Built-up Lands';
+      output_filename: q154_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - avg_nightlight: 13.9439656472
+- question_id: 155
+  domain: zhejiang
+  question: 2017 年 ESA Tree cover 网格的平均 NDVI 是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT AVG(d.ndvi) AS avg_ndvi FROM zhejiang_fishnet_dynamic d
+                    JOIN zhejiang_fishnet_static s ON d.cell_id=s.cell_id
+                    WHERE d.year=2017 AND s.landcover_esa='Tree cover';
+      output_filename: q155_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - avg_ndvi: 0.6728901848
+- question_id: 156
+  domain: zhejiang
+  question: 2022 年浙江省所有网格的平均降水量是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT AVG(precipitation) AS avg_precipitation FROM zhejiang_fishnet_dynamic WHERE year=2022;
+      output_filename: q156_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - avg_precipitation: 1409.6182793923
+- question_id: 157
+  domain: zhejiang
+  question: 2012 年浙江省所有网格人口总和是多少？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT SUM(population) AS total_population FROM zhejiang_fishnet_dynamic WHERE year=2012;
+      output_filename: q157_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - total_population: 49012459
+- question_id: 158
+  domain: zhejiang
+  question: 2022 年浙江省网格数量最多的 IGBP 土地覆盖类型是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_igbp,COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic WHERE year=2022 GROUP BY landcover_igbp ORDER BY grid_count DESC LIMIT 1;
+      output_filename: q158_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - landcover_igbp: Woody Savannas
+      grid_count: 3423
+- question_id: 159
+  domain: zhejiang
+  question: 2017 年浙江省 ERA5-Land 年均 2 米气温最高的网格 ID 是什么？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,era5_temp FROM zhejiang_fishnet_dynamic WHERE year=2017 ORDER BY era5_temp DESC,cell_id LIMIT 1;
+      output_filename: q159_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 6384
+      era5_temp: 18.8923872739
+- question_id: 160
+  domain: zhejiang
+  question: 浙江省行政区划代码 330300 对应哪个城市？
+  difficulty: easy
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT fullname,code FROM zhejiang_city WHERE code='330300';
+      output_filename: q160_zhejiang_easy.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - fullname: 温州市
+      code: '330300'
+- question_id: 161
+  domain: zhejiang
+  question: 找出 2012—2017 年人口增加最多的 5 个浙江网格。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,b.population-a.population AS population_increase
+                    FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2012 AND b.year=2017 ORDER BY population_increase DESC LIMIT 5;
+      output_filename: q161_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8586
+      population_increase: 44892
+    - cell_id: 4489
+      population_increase: 36709
+    - cell_id: 7854
+      population_increase: 36244
+    - cell_id: 4372
+      population_increase: 33698
+    - cell_id: 6525
+      population_increase: 32055
+- question_id: 162
+  domain: zhejiang
+  question: 找出 2017—2022 年 NDVI 降幅最大的 5 个浙江网格。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,a.ndvi-b.ndvi AS ndvi_decrease
+                    FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2017 AND b.year=2022 ORDER BY ndvi_decrease DESC LIMIT 5;
+      output_filename: q162_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 9365
+      ndvi_decrease: 0.8185108298
+    - cell_id: 9415
+      ndvi_decrease: 0.8114760345
+    - cell_id: 9458
+      ndvi_decrease: 0.8092108298
+    - cell_id: 8862
+      ndvi_decrease: 0.7661108298
+    - cell_id: 9340
+      ndvi_decrease: 0.7606025603
+- question_id: 163
+  domain: zhejiang
+  question: 统计 2012、2017、2022 三期 IGBP 土地覆盖类型始终不变的浙江网格数。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS unchanged_grid_count FROM zhejiang_fishnet_dynamic a
+                    JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    JOIN zhejiang_fishnet_dynamic c ON a.cell_id=c.cell_id
+                    WHERE a.year=2012 AND b.year=2017 AND c.year=2022
+                      AND a.landcover_igbp=b.landcover_igbp AND b.landcover_igbp=c.landcover_igbp;
+      output_filename: q163_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - unchanged_grid_count: 7993
+- question_id: 164
+  domain: zhejiang
+  question: 按 ESA 土地覆盖分类统计 2022 年平均夜间灯光，并按均值从高到低排序。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.landcover_esa,AVG(d.nightlight) AS avg_nightlight
+                    FROM zhejiang_fishnet_static s JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id
+                    WHERE d.year=2022 GROUP BY s.landcover_esa ORDER BY avg_nightlight DESC;
+      output_filename: q164_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - landcover_esa: Built-up
+      avg_nightlight: 21.4372378107
+    - landcover_esa: Grassland
+      avg_nightlight: 17.349149024
+    - landcover_esa: Bare sparse vegetation
+      avg_nightlight: 15.4299936481
+    - landcover_esa: Cropland
+      avg_nightlight: 6.2457487316
+    - landcover_esa: Permanent water bodies
+      avg_nightlight: 3.0415181596
+    - landcover_esa: Tree cover
+      avg_nightlight: 1.5120172064
+- question_id: 165
+  domain: zhejiang
+  question: 统计 2022 年气温高于当年平均值、同时降水量低于当年平均值的浙江网格数。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic
+                    WHERE year=2022
+                      AND temperature>(SELECT AVG(temperature) FROM zhejiang_fishnet_dynamic WHERE year=2022)
+                      AND precipitation<(SELECT AVG(precipitation) FROM zhejiang_fishnet_dynamic WHERE year=2022);
+      output_filename: q165_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 2869
+- question_id: 166
+  domain: zhejiang
+  question: 找出 2012—2022 年 built_surface 增量最大的 5 个浙江网格。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,b.built_surface-a.built_surface AS built_surface_increase
+                    FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2012 AND b.year=2022 ORDER BY built_surface_increase DESC LIMIT 5;
+      output_filename: q166_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 4017
+      built_surface_increase: 1237.9264300925
+    - cell_id: 5968
+      built_surface_increase: 1114.6423875382
+    - cell_id: 5762
+      built_surface_increase: 1099.8283879041
+    - cell_id: 6860
+      built_surface_increase: 1073.7035185227
+    - cell_id: 5529
+      built_surface_increase: 1067.6022491457
+- question_id: 167
+  domain: zhejiang
+  question: 统计 2022 年 ESA 与 IGBP 土地覆盖组合的网格数，列出数量最多的 5 种组合。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.landcover_esa,d.landcover_igbp,COUNT(*) AS grid_count
+                    FROM zhejiang_fishnet_static s JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id
+                    WHERE d.year=2022 GROUP BY s.landcover_esa,d.landcover_igbp
+                    ORDER BY grid_count DESC,s.landcover_esa,d.landcover_igbp LIMIT 5;
+      output_filename: q167_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - landcover_esa: Tree cover
+      landcover_igbp: Woody Savannas
+      grid_count: 3418
+    - landcover_esa: Tree cover
+      landcover_igbp: Mixed Forests
+      grid_count: 1335
+    - landcover_esa: Tree cover
+      landcover_igbp: Savannas
+      grid_count: 1036
+    - landcover_esa: Permanent water bodies
+      landcover_igbp: Water Bodies
+      grid_count: 1031
+    - landcover_esa: Tree cover
+      landcover_igbp: Evergreen Broadleaf Forests
+      grid_count: 601
+- question_id: 168
+  domain: zhejiang
+  question: 把 population/area_ratio 作为每平方公里有效面积人口指标，列出 2022 年该指标最高的 5 个浙江网格。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d.cell_id,d.population/NULLIF(f.area_ratio,0) AS population_per_effective_km2
+                    FROM zhejiang_fishnet_dynamic d JOIN zhejiang_fishnet f ON d.cell_id=f.cell_id
+                    WHERE d.year=2022 AND f.area_ratio>0
+                    ORDER BY population_per_effective_km2 DESC LIMIT 5;
+      output_filename: q168_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 5092
+      population_per_effective_km2: 140404917.63565487
+    - cell_id: 7093
+      population_per_effective_km2: 85654356.37033066
+    - cell_id: 5426
+      population_per_effective_km2: 59043390.647816375
+    - cell_id: 624
+      population_per_effective_km2: 56884833.88878611
+    - cell_id: 2997
+      population_per_effective_km2: 19645192.35348164
+- question_id: 169
+  domain: zhejiang
+  question: 按海拔分为低于 100 米、100—500 米、500 米及以上三档，统计各档 2022 年平均 NDVI。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT CASE WHEN s.dem<100 THEN 'low_lt_100'
+                                 WHEN s.dem<500 THEN 'mid_100_500'
+                                 ELSE 'high_ge_500' END AS elevation_band,
+                           AVG(d.ndvi) AS avg_ndvi
+                    FROM zhejiang_fishnet_static s JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id
+                    WHERE d.year=2022 GROUP BY elevation_band ORDER BY elevation_band;
+      output_filename: q169_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - elevation_band: high_ge_500
+      avg_ndvi: 0.7442635966
+    - elevation_band: low_lt_100
+      avg_ndvi: 0.4123934225
+    - elevation_band: mid_100_500
+      avg_ndvi: 0.6796727917
+- question_id: 170
+  domain: zhejiang
+  question: 按 IGBP 分类统计 2022 年平均土壤湿度，列出最高的 5 类。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_igbp,AVG(soil_moisture) AS avg_soil_moisture
+                    FROM zhejiang_fishnet_dynamic WHERE year=2022 GROUP BY landcover_igbp
+                    ORDER BY avg_soil_moisture DESC LIMIT 5;
+      output_filename: q170_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - landcover_igbp: Evergreen Needleleaf Forests
+      avg_soil_moisture: 568.2664629326
+    - landcover_igbp: Evergreen Broadleaf Forests
+      avg_soil_moisture: 559.8713301987
+    - landcover_igbp: Mixed Forests
+      avg_soil_moisture: 540.4594068343
+    - landcover_igbp: Woody Savannas
+      avg_soil_moisture: 512.2903263511
+    - landcover_igbp: Water Bodies
+      avg_soil_moisture: 490.1822870789
+- question_id: 171
+  domain: zhejiang
+  question: 统计 2012—2022 年夜间灯光增加超过 50 的浙江网格数。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic a
+                    JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2012 AND b.year=2022 AND b.nightlight-a.nightlight>50;
+      output_filename: q171_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 4
+- question_id: 172
+  domain: zhejiang
+  question: 统计年平均气温在 2012—2017 和 2017—2022 两个阶段都上升的浙江网格数。
+  difficulty: medium
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic a
+                    JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    JOIN zhejiang_fishnet_dynamic c ON a.cell_id=c.cell_id
+                    WHERE a.year=2012 AND b.year=2017 AND c.year=2022
+                      AND a.temperature<b.temperature AND b.temperature<c.temperature;
+      output_filename: q172_zhejiang_medium.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 9009
+- question_id: 173
+  domain: zhejiang
+  question: 提取 2022 年浙江网格 EVI 与 LAI，用 Python 计算 Pearson 相关系数和 P 值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT evi,lai FROM zhejiang_fishnet_dynamic WHERE year=2022 AND evi IS NOT NULL AND lai IS NOT NULL;
+      output_filename: q173_evi_lai.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import pearsonr
+    df=pd.read_json("q173_evi_lai.json")
+    r,p=pearsonr(df["evi"],df["lai"])
+    payload={"pearson_r":float(r),"p_value":float(p)}
+    answer_text=f"Pearson r={r:.6f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      pearson_r: 0.6436708993795228
+      p_value: 0.0
+- question_id: 174
+  domain: zhejiang
+  question: 提取浙江网格海拔与 2017 年年平均气温，计算 Spearman 相关系数和 P 值。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.dem,d.temperature FROM zhejiang_fishnet_static s
+                       JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id
+                       WHERE d.year=2017 AND s.dem IS NOT NULL AND d.temperature IS NOT NULL;
+      output_filename: q174_dem_temperature.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import spearmanr
+    df=pd.read_json("q174_dem_temperature.json")
+    r,p=spearmanr(df["dem"],df["temperature"])
+    payload={"spearman_rho":float(r),"p_value":float(p)}
+    answer_text=f"Spearman rho={r:.6f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      spearman_rho: -0.633173382704815
+      p_value: 0.0
+- question_id: 175
+  domain: zhejiang
+  question: 对每个浙江网格的 2012、2017、2022 年 NDVI 用年份做线性回归，输出 NDVI 斜率最大的 3 个网格。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,year,ndvi FROM zhejiang_fishnet_dynamic WHERE year IN (2012,2017,2022) AND ndvi IS NOT NULL;
+      output_filename: q175_ndvi_trends.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import linregress
+    df=pd.read_json("q175_ndvi_trends.json")
+    rows=[]
+    for cell_id,g in df.groupby("cell_id"):
+        if len(g)==3:
+            slope=linregress(g["year"],g["ndvi"]).slope
+            rows.append({"cell_id":int(cell_id),"slope":float(slope)})
+    rows=sorted(rows,key=lambda x:(-x["slope"],x["cell_id"]))[:3]
+    payload={"top_3_ndvi_slopes":rows}
+    answer_text="已输出 NDVI 趋势斜率最大的 3 个网格。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_ndvi_slopes:
+      - cell_id: 9390
+        slope: 0.08315183746000002
+      - cell_id: 9366
+        slope: 0.07506415229
+      - cell_id: 8458
+        slope: 0.07317108298000001
+- question_id: 176
+  domain: zhejiang
+  question: 对 2022 年浙江网格夜间灯光先做 log1p 变换，再用总体标准差做 Z-Score，输出标准化值最高的 3 个网格。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id,nightlight FROM zhejiang_fishnet_dynamic WHERE year=2022 AND nightlight IS NOT NULL;
+      output_filename: q176_nightlight_logz.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    from sklearn.preprocessing import StandardScaler
+    df=pd.read_json("q176_nightlight_logz.json")
+    df["log_light"]=np.log1p(df["nightlight"])
+    df["z"]=StandardScaler().fit_transform(df[["log_light"]]).ravel()
+    top=df.sort_values(["z","cell_id"],ascending=[False,True]).head(3)
+    rows=[{"cell_id":int(r.cell_id),"log_nightlight_z":float(r.z)} for r in top.itertuples()]
+    payload={"top_3_grids":rows}
+    answer_text="已输出 log1p 夜间灯光 Z-Score 最高的 3 个网格。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_grids:
+      - cell_id: 9242
+        log_nightlight_z: 4.288072111141399
+      - cell_id: 9191
+        log_nightlight_z: 4.2259443237951695
+      - cell_id: 9241
+        log_nightlight_z: 4.019659164814007
+- question_id: 177
+  domain: zhejiang
+  question: 比较 2022 年 IGBP 城市建设用地与农用地网格的 NDVI，做双侧 Mann–Whitney U 检验。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT landcover_igbp,ndvi FROM zhejiang_fishnet_dynamic
+                       WHERE year=2022 AND landcover_igbp IN ('Urban and Built-up Lands','Croplands') AND ndvi IS NOT NULL;
+      output_filename: q177_urban_cropland_ndvi.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import mannwhitneyu
+    df=pd.read_json("q177_urban_cropland_ndvi.json")
+    a=df.loc[df["landcover_igbp"]=="Urban and Built-up Lands","ndvi"]
+    b=df.loc[df["landcover_igbp"]=="Croplands","ndvi"]
+    u,p=mannwhitneyu(a,b,alternative="two-sided")
+    payload={"u_statistic":float(u),"p_value":float(p)}
+    answer_text=f"U={u:.3f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      u_statistic: 25633.0
+      p_value: 5.285676174421106e-106
+- question_id: 178
+  domain: zhejiang
+  question: 对 2022 年浙江网格的气温、降水量和夜间灯光做 Z-Score 标准化，再用 K-Means（k=3、random_state=42、n_init=10）聚类并输出每类数量。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT temperature,precipitation,nightlight FROM zhejiang_fishnet_dynamic
+                       WHERE year=2022 AND temperature IS NOT NULL AND precipitation IS NOT NULL AND nightlight IS NOT NULL;
+      output_filename: q178_environment_kmeans.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    df=pd.read_json("q178_environment_kmeans.json")
+    x=StandardScaler().fit_transform(df)
+    labels=KMeans(n_clusters=3,random_state=42,n_init=10).fit_predict(x)
+    counts=pd.Series(labels).value_counts().sort_index()
+    payload={"cluster_counts":{str(int(k)):int(v) for k,v in counts.items()}}
+    answer_text="已完成 3 类环境聚类。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cluster_counts:
+        '0': 2555
+        '1': 6479
+        '2': 699
+- question_id: 179
+  domain: zhejiang
+  question: 将 2017 年浙江网格降水量样本按 cell_id 升序排列后做 500 次有放回 bootstrap；使用 numpy.random.default_rng(42) 作为随机数生成器，每次抽取与原样本等量的数据，输出均值的 95% 百分位置信区间（2.5% 和 97.5% 分位数）。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT cell_id, precipitation
+        FROM zhejiang_fishnet_dynamic
+        WHERE year=2017 AND precipitation IS NOT NULL
+        ORDER BY cell_id;
+      output_filename: q179_precip_bootstrap.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    df=pd.read_json("q179_precip_bootstrap.json")
+    x=df["precipitation"].to_numpy()
+    rng=np.random.default_rng(42)
+    means=np.array([rng.choice(x,size=len(x),replace=True).mean() for _ in range(500)])
+    lo,hi=np.percentile(means,[2.5,97.5])
+    payload={"bootstrap_mean":float(means.mean()),"ci95_lower":float(lo),"ci95_upper":float(hi)}
+    answer_text=f"95% CI=[{lo:.3f}, {hi:.3f}]"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      ci95_lower: 1370.4767890778605
+      ci95_upper: 1376.8913117133518
+- question_id: 180
+  domain: zhejiang
+  question: 提取浙江网格 2012 与 2022 年人口，计算 10 年复合年增长率，输出增长率最高的 3 个网格（仅保留 2012 年人口大于 0 的网格）。
+  difficulty: medium
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,a.population AS pop_2012,b.population AS pop_2022
+                       FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                       WHERE a.year=2012 AND b.year=2022 AND a.population>0;
+      output_filename: q180_population_cagr.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    df=pd.read_json("q180_population_cagr.json")
+    df["cagr"]=np.power(df["pop_2022"]/df["pop_2012"],1/10)-1
+    top=df.sort_values(["cagr","cell_id"],ascending=[False,True]).head(3)
+    rows=[{"cell_id":int(r.cell_id),"cagr":float(r.cagr)} for r in top.itertuples()]
+    payload={"top_3_population_cagr":rows}
+    answer_text="已输出人口 CAGR 最高的 3 个网格。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_population_cagr:
+      - cell_id: 9099
+        cagr: 0.17461894308801895
+      - cell_id: 9620
+        cagr: 0.15492586785551365
+      - cell_id: 7839
+        cagr: 0.1388828709080534
+- question_id: 181
+  domain: zhejiang
+  question: 统计 IGBP 土地覆盖在 2012—2017 和 2017—2022 两个阶段都发生变化的浙江网格数。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS changed_twice_count FROM zhejiang_fishnet_dynamic a
+                    JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    JOIN zhejiang_fishnet_dynamic c ON a.cell_id=c.cell_id
+                    WHERE a.year=2012 AND b.year=2017 AND c.year=2022
+                      AND a.landcover_igbp<>b.landcover_igbp AND b.landcover_igbp<>c.landcover_igbp;
+      output_filename: q181_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - changed_twice_count: 297
+- question_id: 182
+  domain: zhejiang
+  question: 对 2022 年人口、夜间灯光和 built_surface 分别按降序排名，计算三项平均排名，列出综合排名前 5 的浙江网格。
+  difficulty: hard
+  requires_sandbox: false
+  answer_fields:
+  - cell_id
+  - mean_rank
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH r AS (
+                      SELECT cell_id,
+                        RANK() OVER(ORDER BY population DESC) AS pop_rank,
+                        RANK() OVER(ORDER BY nightlight DESC) AS light_rank,
+                        RANK() OVER(ORDER BY built_surface DESC) AS built_rank
+                      FROM zhejiang_fishnet_dynamic WHERE year=2022
+                    )
+                    SELECT cell_id,pop_rank,light_rank,built_rank,
+                           (pop_rank+light_rank+built_rank)/3.0 AS mean_rank
+                    FROM r ORDER BY mean_rank,cell_id LIMIT 5;
+      output_filename: q182_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8473
+      pop_rank: 37
+      light_rank: 12
+      built_rank: 1
+      mean_rank: 16.6666666667
+    - cell_id: 4489
+      pop_rank: 2
+      light_rank: 30
+      built_rank: 26
+      mean_rank: 19.3333333333
+    - cell_id: 4373
+      pop_rank: 6
+      light_rank: 28
+      built_rank: 28
+      mean_rank: 20.6666666667
+    - cell_id: 4835
+      pop_rank: 21
+      light_rank: 33
+      built_rank: 13
+      mean_rank: 22.3333333333
+    - cell_id: 7853
+      pop_rank: 42
+      light_rank: 20
+      built_rank: 7
+      mean_rank: 23.0
+- question_id: 183
+  domain: zhejiang
+  question: 统计 ESA 为 Tree cover、但 2022 年 IGBP 不属于四种森林类型的浙江网格数。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_static s
+                    JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id
+                    WHERE s.landcover_esa='Tree cover' AND d.year=2022
+                      AND d.landcover_igbp NOT IN
+                        ('Evergreen Needleleaf Forests','Evergreen Broadleaf Forests',
+                         'Deciduous Broadleaf Forests','Mixed Forests');
+      output_filename: q183_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 4857
+- question_id: 184
+  domain: zhejiang
+  question: 统计 2012—2022 年 IGBP 土地覆盖转移，列出数量最多的 5 种起止类型组合。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.landcover_igbp AS class_2012,b.landcover_igbp AS class_2022,COUNT(*) AS grid_count
+                    FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2012 AND b.year=2022
+                    GROUP BY a.landcover_igbp,b.landcover_igbp
+                    ORDER BY grid_count DESC,class_2012,class_2022 LIMIT 5;
+      output_filename: q184_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - class_2012: Woody Savannas
+      class_2022: Woody Savannas
+      grid_count: 3221
+    - class_2012: Mixed Forests
+      class_2022: Mixed Forests
+      grid_count: 1127
+    - class_2012: Savannas
+      class_2022: Savannas
+      grid_count: 1120
+    - class_2012: Water Bodies
+      class_2022: Water Bodies
+      grid_count: 1108
+    - class_2012: Urban and Built-up Lands
+      class_2022: Urban and Built-up Lands
+      grid_count: 635
+- question_id: 185
+  domain: zhejiang
+  question: 统计 2022 年 NDVI 不低于第 90 百分位且夜间灯光不高于第 10 百分位的浙江网格数。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH t AS (
+                      SELECT PERCENTILE_CONT(0.9) WITHIN GROUP(ORDER BY ndvi) AS ndvi_p90,
+                             PERCENTILE_CONT(0.1) WITHIN GROUP(ORDER BY nightlight) AS light_p10
+                      FROM zhejiang_fishnet_dynamic WHERE year=2022
+                    )
+                    SELECT COUNT(*) AS grid_count FROM zhejiang_fishnet_dynamic d CROSS JOIN t
+                    WHERE d.year=2022 AND d.ndvi>=t.ndvi_p90 AND d.nightlight<=t.light_p10;
+      output_filename: q185_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - grid_count: 370
+- question_id: 186
+  domain: zhejiang
+  question: 按海拔把浙江网格等频分为 4 组，统计各组 2022 年平均降水量。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH b AS (
+                      SELECT cell_id,NTILE(4) OVER(ORDER BY dem) AS elevation_quartile
+                      FROM zhejiang_fishnet_static
+                    )
+                    SELECT b.elevation_quartile,AVG(d.precipitation) AS avg_precipitation
+                    FROM b JOIN zhejiang_fishnet_dynamic d ON b.cell_id=d.cell_id
+                    WHERE d.year=2022 GROUP BY b.elevation_quartile ORDER BY b.elevation_quartile;
+      output_filename: q186_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - elevation_quartile: 1
+      avg_precipitation: 1222.6055705601
+    - elevation_quartile: 2
+      avg_precipitation: 1361.3968689436
+    - elevation_quartile: 3
+      avg_precipitation: 1445.5781426371
+    - elevation_quartile: 4
+      avg_precipitation: 1608.9694004955
+- question_id: 187
+  domain: zhejiang
+  question: 对 2012 年 EVI 大于 0 的浙江网格计算 2012—2022 年 EVI 百分比增幅，列出前 5 个。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,(b.evi-a.evi)/a.evi AS evi_growth_rate
+                    FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                    WHERE a.year=2012 AND b.year=2022 AND a.evi>0
+                    ORDER BY evi_growth_rate DESC LIMIT 5;
+      output_filename: q187_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - cell_id: 8993
+      evi_growth_rate: 415.5582002133
+    - cell_id: 6958
+      evi_growth_rate: 117.2203029972
+    - cell_id: 3568
+      evi_growth_rate: 29.6218824537
+    - cell_id: 8526
+      evi_growth_rate: 24.8177189409
+    - cell_id: 9091
+      evi_growth_rate: 23.361157342
+- question_id: 188
+  domain: zhejiang
+  question: 分别找出 2022 年每种 IGBP 土地覆盖类型中人口最多的浙江网格。
+  difficulty: hard
+  requires_sandbox: false
+  expected_sql_plan:
+    queries:
+    - sql: |
+        WITH r AS (
+                      SELECT landcover_igbp,cell_id,population,
+                             ROW_NUMBER() OVER(PARTITION BY landcover_igbp ORDER BY population DESC,cell_id) AS rn
+                      FROM zhejiang_fishnet_dynamic WHERE year=2022
+                    )
+                    SELECT landcover_igbp,cell_id,population FROM r WHERE rn=1 ORDER BY landcover_igbp;
+      output_filename: q188_zhejiang_hard.json
+      has_geometry: false
+  expected_python_code: null
+  expected_execution_result:
+    exact_match_sql_rows: true
+    data_payload_subset:
+    - landcover_igbp: Cropland Natural Vegetation Mosaics
+      cell_id: 5886
+      population: 29954
+    - landcover_igbp: Croplands
+      cell_id: 7496
+      population: 54370
+    - landcover_igbp: Deciduous Broadleaf Forests
+      cell_id: 9538
+      population: 2382
+    - landcover_igbp: Evergreen Broadleaf Forests
+      cell_id: 6275
+      population: 20895
+    - landcover_igbp: Evergreen Needleleaf Forests
+      cell_id: 5269
+      population: 4621
+    - landcover_igbp: Grasslands
+      cell_id: 6152
+      population: 10760
+    - landcover_igbp: Mixed Forests
+      cell_id: 4574
+      population: 40420
+    - landcover_igbp: Permanent Wetlands
+      cell_id: 4386
+      population: 22832
+    - landcover_igbp: Savannas
+      cell_id: 2579
+      population: 67163
+    - landcover_igbp: Urban and Built-up Lands
+      cell_id: 8586
+      population: 410549
+    - landcover_igbp: Water Bodies
+      cell_id: 6770
+      population: 49946
+    - landcover_igbp: Woody Savannas
+      cell_id: 6527
+      population: 48839
+- question_id: 189
+  domain: zhejiang
+  question: 找出完全位于杭州市行政区内的 1 km² 浙江网格，并以 area_ratio 作为省界内有效面积比例，计算有效面积总和。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT geometry AS city_geom FROM zhejiang_city WHERE fullname='杭州市';
+      output_filename: q189_hangzhou_city.geojson
+      has_geometry: true
+    - sql: |
+        SELECT cell_id,area_ratio,geometry FROM zhejiang_fishnet;
+      output_filename: q189_fishnet.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    city=gpd.read_file("q189_hangzhou_city.geojson").to_crs(32651)
+    grids=gpd.read_file("q189_fishnet.geojson").to_crs(32651)
+    geom=city.geometry.iloc[0]
+    inside=grids[grids.geometry.within(geom)]
+    area=inside["area_ratio"].sum()
+    payload={"grid_count":int(len(inside)),"effective_area_km2":float(area)}
+    answer_text=f"{len(inside)} 个完全位于杭州市内的网格，有效面积 {area:.3f} km²。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 1251
+      effective_area_km2: 1251.0
+- question_id: 190
+  domain: zhejiang
+  question: 以 120.2°E、30.3°N 为目标点，以等积投影后的城市几何质心代表城市位置，找出质心大地线距离最近的浙江城市。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT fullname,code,geometry FROM zhejiang_city;
+      output_filename: q190_zhejiang_cities.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    from pyproj import Geod
+    cities=gpd.read_file("q190_zhejiang_cities.geojson")
+    centers=cities.to_crs(6933).geometry.centroid.to_crs(4326)
+    geod=Geod(ellps="WGS84")
+    rows=[]
+    for idx,row in cities.iterrows():
+        c=centers.loc[idx]
+        km=geod.inv(120.2,30.3,c.x,c.y)[2]/1000
+        rows.append((km,str(row["fullname"]),str(row["code"])))
+    km,name,code=min(rows)
+    payload={"fullname":name,"code":code,"distance_km":float(km)}
+    answer_text=f"最近城市为 {name}，质心距离 {km:.3f} km。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      fullname: 湖州市
+      code: '330500'
+      distance_km: 58.16286805053183
+- question_id: 191
+  domain: zhejiang
+  question: 以浙江网格几何质心归属城市（质心位于城市面内）为口径，统计各城市网格数并输出最多的 3 个城市。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT fullname,code,geometry FROM zhejiang_city;
+      output_filename: q191_cities.geojson
+      has_geometry: true
+    - sql: |
+        SELECT cell_id,geometry FROM zhejiang_fishnet;
+      output_filename: q191_fishnet.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    cities=gpd.read_file("q191_cities.geojson").to_crs(32651)
+    grids=gpd.read_file("q191_fishnet.geojson").to_crs(32651)
+    points=grids[["cell_id"]].copy()
+    points=gpd.GeoDataFrame(points,geometry=grids.geometry.centroid,crs=grids.crs)
+    joined=gpd.sjoin(points,cities[["fullname","code","geometry"]],predicate="within",how="inner")
+    counts=joined.groupby(["fullname","code"]).size().reset_index(name="grid_count")
+    counts=counts.sort_values(["grid_count","fullname"],ascending=[False,True]).head(3)
+    rows=[{"fullname":str(r.fullname),"code":str(r.code),"grid_count":int(r.grid_count)} for r in counts.itertuples()]
+    payload={"top_3_cities":rows}
+    answer_text="已输出按网格质心归属统计的前 3 个城市。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_cities:
+      - fullname: 丽水市
+        code: '331100'
+        grid_count: 1443
+      - fullname: 杭州市
+        code: '330100'
+        grid_count: 1397
+      - fullname: 温州市
+        code: '330300'
+        grid_count: 975
+- question_id: 192
+  domain: zhejiang
+  question: 以 120.9791265°E、29.7149397°N 为中心，筛选几何质心在 15 公里内的浙江网格，计算其 2022 年平均 NDVI。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT f.cell_id,f.geometry,d.ndvi FROM zhejiang_fishnet f
+                              JOIN zhejiang_fishnet_dynamic d ON f.cell_id=d.cell_id
+                              WHERE d.year=2022 AND d.ndvi IS NOT NULL;
+      output_filename: q192_ndvi_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    from shapely.geometry import Point
+    gdf=gpd.read_file("q192_ndvi_geometries.geojson").to_crs(32651)
+    center=gpd.GeoSeries([Point(120.9791265,29.7149397)],crs=4326).to_crs(32651).iloc[0]
+    dist=gdf.geometry.centroid.distance(center)
+    selected=gdf[dist<=15000]
+    value=selected["ndvi"].mean()
+    payload={"grid_count":int(len(selected)),"avg_ndvi":float(value)}
+    answer_text=f"15 公里内有 {len(selected)} 个网格，平均 NDVI={value:.6f}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 60
+      avg_ndvi: 0.6902340459425371
+- question_id: 193
+  domain: zhejiang
+  question: 构造温州市行政区外侧 5—15 公里环带，找出与环带相交的浙江网格并计算其 2022 年平均人口。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT geometry AS city_geom FROM zhejiang_city WHERE fullname='温州市';
+      output_filename: q193_wenzhou_city.geojson
+      has_geometry: true
+    - sql: |
+        SELECT f.cell_id,f.geometry,d.population FROM zhejiang_fishnet f
+                                  JOIN zhejiang_fishnet_dynamic d ON f.cell_id=d.cell_id WHERE d.year=2022;
+      output_filename: q193_population_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    city=gpd.read_file("q193_wenzhou_city.geojson").to_crs(32651)
+    grids=gpd.read_file("q193_population_geometries.geojson").to_crs(32651)
+    geom=city.geometry.iloc[0]
+    ring=geom.buffer(15000).difference(geom.buffer(5000))
+    selected=grids[grids.geometry.intersects(ring)]
+    value=selected["population"].mean()
+    payload={"grid_count":int(len(selected)),"avg_population":float(value)}
+    answer_text=f"环带相交网格 {len(selected)} 个，平均人口 {value:.3f}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      grid_count: 436
+      avg_population: 4795.525229357798
+- question_id: 194
+  domain: zhejiang
+  question: 筛选 2022 年 NDVI 不低于第 90 百分位的浙江网格，以 EPSG:32651 下的网格质心做 K-Means（k=4、random_state=42、n_init=10），输出每类数量。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT f.cell_id,f.geometry,d.ndvi FROM zhejiang_fishnet f
+                              JOIN zhejiang_fishnet_dynamic d ON f.cell_id=d.cell_id
+                              WHERE d.year=2022 AND d.ndvi>=
+                                (SELECT PERCENTILE_CONT(0.9) WITHIN GROUP(ORDER BY ndvi)
+                                 FROM zhejiang_fishnet_dynamic WHERE year=2022);
+      output_filename: q194_high_ndvi_geometries.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    import pandas as pd
+    from sklearn.cluster import KMeans
+    gdf=gpd.read_file("q194_high_ndvi_geometries.geojson").to_crs(32651)
+    c=gdf.geometry.centroid
+    x=list(zip(c.x,c.y))
+    labels=KMeans(n_clusters=4,random_state=42,n_init=10).fit_predict(x)
+    counts=pd.Series(labels).value_counts().sort_index()
+    payload={"cluster_counts":{str(int(k)):int(v) for k,v in counts.items()}}
+    answer_text="已完成高 NDVI 网格的 4 类空间聚类。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      cluster_counts:
+        '0': 234
+        '1': 303
+        '2': 62
+        '3': 375
+- question_id: 195
+  domain: zhejiang
+  question: 对 2022 年浙江网格的气温、降水、土壤湿度、NDVI、夜间灯光、built_surface 六项指标标准化后做 PCA，输出前三个主成分方差解释率。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT temperature,precipitation,soil_moisture,ndvi,nightlight,built_surface
+                              FROM zhejiang_fishnet_dynamic WHERE year=2022;
+      output_filename: q195_environment_pca.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA
+    df=pd.read_json("q195_environment_pca.json").dropna()
+    x=StandardScaler().fit_transform(df)
+    ratios=PCA(n_components=3).fit(x).explained_variance_ratio_
+    payload={"pc1_ratio":float(ratios[0]),"pc2_ratio":float(ratios[1]),"pc3_ratio":float(ratios[2])}
+    answer_text="已输出前三个主成分方差解释率。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      pc1_ratio: 0.520119826581636
+      pc2_ratio: 0.22278490377168447
+      pc3_ratio: 0.1369960996714283
+- question_id: 196
+  domain: zhejiang
+  question: 用 2022 年浙江网格人口、built_surface、气温和 NDVI 预测夜间灯光；自变量先做 Z-Score 标准化，输出 R-squared 和绝对标准化系数最大的特征。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT nightlight,population,built_surface,temperature,ndvi
+                              FROM zhejiang_fishnet_dynamic WHERE year=2022;
+      output_filename: q196_nightlight_regression.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score
+    df=pd.read_json("q196_nightlight_regression.json").dropna()
+    cols=["population","built_surface","temperature","ndvi"]
+    x=StandardScaler().fit_transform(df[cols])
+    y=df["nightlight"]
+    model=LinearRegression().fit(x,y)
+    r2=r2_score(y,model.predict(x))
+    feature=cols[int(np.argmax(np.abs(model.coef_)))]
+    payload={"r_squared":float(r2),"most_important_feature":feature}
+    answer_text=f"R²={r2:.6f}，最大标准化系数对应 {feature}。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      r_squared: 0.6853339945953385
+      most_important_feature: built_surface
+- question_id: 197
+  domain: zhejiang
+  question: 计算浙江网格 2012—2022 年气温变化量与夜间灯光变化量的 Pearson 相关系数和 P 值。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT a.cell_id,b.temperature-a.temperature AS delta_temperature,
+                                     b.nightlight-a.nightlight AS delta_nightlight
+                              FROM zhejiang_fishnet_dynamic a JOIN zhejiang_fishnet_dynamic b ON a.cell_id=b.cell_id
+                              WHERE a.year=2012 AND b.year=2022;
+      output_filename: q197_temperature_light_change.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    from scipy.stats import pearsonr
+    df=pd.read_json("q197_temperature_light_change.json").dropna()
+    r,p=pearsonr(df["delta_temperature"],df["delta_nightlight"])
+    payload={"pearson_r":float(r),"p_value":float(p)}
+    answer_text=f"Pearson r={r:.6f}, p={p:.6g}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      pearson_r: 0.026188582923467547
+      p_value: 0.009772658227847935
+- question_id: 198
+  domain: zhejiang
+  question: 对 2022 年浙江网格 ESA 与 IGBP 土地覆盖分类构造列联表，做卡方独立性检验，并输出卡方值、P 值、自由度和 Cramer's V。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT s.landcover_esa,d.landcover_igbp FROM zhejiang_fishnet_static s
+                              JOIN zhejiang_fishnet_dynamic d ON s.cell_id=d.cell_id WHERE d.year=2022;
+      output_filename: q198_landcover_chi_square.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    import numpy as np
+    from scipy.stats import chi2_contingency
+    df=pd.read_json("q198_landcover_chi_square.json").dropna()
+    table=pd.crosstab(df["landcover_esa"],df["landcover_igbp"])
+    chi2,p,dof,_=chi2_contingency(table)
+    n=table.to_numpy().sum()
+    v=np.sqrt(chi2/(n*min(table.shape[0]-1,table.shape[1]-1)))
+    payload={"chi_square":float(chi2),"p_value":float(p),"degrees_of_freedom":int(dof),"cramers_v":float(v)}
+    answer_text=f"χ²={chi2:.3f}, p={p:.6g}, Cramer's V={v:.6f}"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      chi_square: 17825.83353318613
+      p_value: 0.0
+      degrees_of_freedom: 55
+      cramers_v: 0.6052245823598853
+- question_id: 199
+  domain: zhejiang
+  question: 找到 2022 年人口最多的浙江网格，再用几何 touches 谓词识别与它共边或共点的邻接网格，计算邻接网格平均夜间灯光。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT f.cell_id,f.geometry,d.population FROM zhejiang_fishnet f
+                                  JOIN zhejiang_fishnet_dynamic d ON f.cell_id=d.cell_id
+                                  WHERE d.year=2022 ORDER BY d.population DESC LIMIT 1;
+      output_filename: q199_top_population_grid.geojson
+      has_geometry: true
+    - sql: |
+        SELECT f.cell_id,f.geometry,d.nightlight FROM zhejiang_fishnet f
+                                  JOIN zhejiang_fishnet_dynamic d ON f.cell_id=d.cell_id WHERE d.year=2022;
+      output_filename: q199_all_grids.geojson
+      has_geometry: true
+  expected_python_code: |
+    import json
+    import geopandas as gpd
+    top=gpd.read_file("q199_top_population_grid.geojson")
+    grids=gpd.read_file("q199_all_grids.geojson")
+    top_id=int(top.iloc[0]["cell_id"])
+    geom=top.geometry.iloc[0]
+    neighbors=grids[(grids["cell_id"]!=top_id) & grids.geometry.touches(geom)]
+    value=neighbors["nightlight"].mean()
+    payload={"target_cell_id":top_id,"neighbor_count":int(len(neighbors)),"avg_neighbor_nightlight":float(value)}
+    answer_text=f"目标网格 {top_id} 有 {len(neighbors)} 个 touches 邻接网格。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      target_cell_id: 8586
+      neighbor_count: 8
+      avg_neighbor_nightlight: 36.385263451868425
+- question_id: 200
+  domain: zhejiang
+  question: 筛选 ESA Tree cover 且三期数据完整的浙江网格。定义稳定性指数为 NDVI 三期均值除以（1 + NDVI 样本变异系数 + 降水样本变异系数），输出指数最高的 3 个网格。
+  difficulty: hard
+  requires_sandbox: true
+  expected_sql_plan:
+    queries:
+    - sql: |
+        SELECT d.cell_id,d.year,d.ndvi,d.precipitation FROM zhejiang_fishnet_dynamic d
+                              JOIN zhejiang_fishnet_static s ON d.cell_id=s.cell_id
+                              WHERE s.landcover_esa='Tree cover' AND d.year IN (2012,2017,2022)
+                                AND d.ndvi IS NOT NULL AND d.precipitation IS NOT NULL;
+      output_filename: q200_tree_stability.json
+      has_geometry: false
+  expected_python_code: |
+    import json
+    import pandas as pd
+    df=pd.read_json("q200_tree_stability.json")
+    rows=[]
+    for cell_id,g in df.groupby("cell_id"):
+        if len(g)!=3:
+            continue
+        ndvi_mean=g["ndvi"].mean()
+        ndvi_cv=g["ndvi"].std(ddof=1)/abs(ndvi_mean)
+        precip_mean=g["precipitation"].mean()
+        precip_cv=g["precipitation"].std(ddof=1)/abs(precip_mean)
+        score=ndvi_mean/(1+ndvi_cv+precip_cv)
+        rows.append({"cell_id":int(cell_id),"stability_index":float(score)})
+    rows=sorted(rows,key=lambda x:(-x["stability_index"],x["cell_id"]))[:3]
+    payload={"top_3_stable_cells":rows}
+    answer_text="已输出稳定性指数最高的 3 个 Tree cover 网格。"
+
+    print(json.dumps({
+        "status": "ok",
+        "answer_text": answer_text,
+        "data_payload": payload
+    }, ensure_ascii=False))
+  expected_execution_result:
+    exact_match_sql_rows: false
+    data_payload_subset:
+      top_3_stable_cells:
+      - cell_id: 1028
+        stability_index: 0.667917370877973
+      - cell_id: 7266
+        stability_index: 0.6626892193403864
+      - cell_id: 7925
+        stability_index: 0.6622098477356398
