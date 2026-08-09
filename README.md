@@ -1,6 +1,6 @@
 # NL2SQL Geospatial Benchmark (200 Questions)
 
-This repository contains the public reproduction package for the benchmark used in the CGD-QCSF paper. It publishes the benchmark, database-construction material, strict evaluator, and reproduction instructions only. It does not contain framework source code, model API keys, database passwords, local paths, or raw experiment logs.
+This repository contains the public reproduction package for the benchmark used in the CGD-QCSF paper. It publishes the benchmark, database-construction material, strict evaluator, principal prompt templates, and a minimal runnable implementation of the core framework. It does not contain model API keys, database passwords, local paths, raw experiment logs, or generated runtime caches.
 
 ## Contents
 
@@ -9,7 +9,9 @@ This repository contains the public reproduction package for the benchmark used 
 | `dev_plus.yaml` | 200 verified Chinese geospatial and spatio-temporal questions |
 | `create_database.sql` | PostgreSQL/PostGIS schema and data snapshot used by the benchmark |
 | `evaluate_experiments.py` | Strict structured evaluator used in the revised experiments |
+| `framework/` | Minimal runnable CGD-QCSF core, prompt templates, schema descriptions, and execution adapters |
 | `requirements.txt` | Minimal Python dependencies for reading the benchmark and running the evaluator |
+| `LICENSE` | MIT License covering the released code |
 
 ## Benchmark Composition
 
@@ -72,12 +74,17 @@ Each run directory should contain one result YAML per question with the same fie
 
 The primary metric is `strict_structured_accuracy`. It checks answer-schema validity, entity–value pairing, list membership and order, numerical tolerance, units, exact integer identifiers, and tie-aware Top-K equivalence. `first_execution_path_success_rate` is auxiliary: it requires a correct strict answer with no failed tool call and no guardrail retry. A correct result obtained after bounded recovery remains correct under the primary metric.
 
+## Core Framework and Prompt Templates
+
+The released implementation is under [`framework/`](framework/). It contains the directed state graph, execution-state manager, SCGA and STCA adapters, answer and execution contracts, evidence review, bounded recovery, semantic schema retrieval, and the principal intent-understanding, Text-to-SQL, and Python code-generation prompts. See [`framework/README.md`](framework/README.md) for setup and execution instructions.
+
 ## Reproducibility Boundary
 
 - Expected answers were obtained by running reference SQL and, when required, reference Python against the supplied database snapshot.
 - The benchmark covers structured relational data, vector boundaries, and vector fishnet attributes.
 - Native raster, trajectory streams, real-time sensors, open-web data discovery, ArcGIS Pro control, and QGIS desktop control are outside this release.
 - Large model providers are external services; API availability, pricing, and model behavior may change.
+- The local Python subprocess is an experimental execution boundary and should be replaced by stronger operating-system or container isolation for untrusted production deployment.
 
 ## Citation
 

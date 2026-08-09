@@ -1,0 +1,17 @@
+.env
+*.env
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+workspace/
+workspace_runs/
+results/
+benchmark/agent_runs/
+**/chroma_db/
+**/.sandbox_runs/
+
+framework/code_templates/*.py
+!framework/code_templates/README.md

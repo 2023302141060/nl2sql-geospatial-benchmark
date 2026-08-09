@@ -1,0 +1,60 @@
+table_name: usa_env_metrics_monthly_2020
+table_description: 美国2020年月度生态环境与社会经济指标动态数据表（俗称：美国月度环境面板数据、2020年环境月报、空气与地表月度统计数据；包含温度、植被、夜间灯光、雾霾空气质量和碳排放浓度等多个维度的月度时间序列信息）
+domain: 美国
+spatiotemporal_properties:
+  spatial_granularity: 空间区划单元
+  temporal_granularity: 月度
+  has_geometry: false
+columns:
+- name: asdf_id
+  type: BIGINT
+  description: 空间单元唯一标识
+  is_primary_key: true
+  foreign_key: usa_spatial_base.asdf_id
+- name: year
+  type: BIGINT
+  description: 年份
+  is_primary_key: true
+  is_temporal_column: true
+  enums:
+  - '2020'
+- name: month
+  type: BIGINT
+  description: 月份
+  is_primary_key: true
+  is_temporal_column: true
+  enums:
+  - '12'
+  - '3'
+  - '11'
+  - '8'
+  - '10'
+  - '9'
+  - '7'
+  - '1'
+  - '5'
+  - '4'
+  - '2'
+  - '6'
+- name: lst_day_mean
+  type: DOUBLE PRECISION
+  description: 日间地表温度月均值
+  aliases: [白天地表温度, 日间地表温度, 白天LST, daytime LST]
+- name: lst_night_mean
+  type: DOUBLE PRECISION
+  description: 夜间地表温度月均值
+- name: ndvi_mean
+  type: DOUBLE PRECISION
+  description: 平均归一化植被指数
+  aliases: [NDVI, 平均NDVI, 归一化植被指数]
+- name: ntl_mean
+  type: DOUBLE PRECISION
+  description: 平均夜间灯光指数
+  aliases: [夜间灯光, 夜间灯光强度, 夜光, NTL]
+- name: pm25_mean
+  type: DOUBLE PRECISION
+  description: 平均PM2.5浓度
+  aliases: [PM2.5, PM25, 细颗粒物浓度, 平均PM2.5]
+- name: xco2_mean
+  type: DOUBLE PRECISION
+  description: 平均二氧化碳柱浓度

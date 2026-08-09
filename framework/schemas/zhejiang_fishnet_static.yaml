@@ -1,0 +1,42 @@
+table_name: zhejiang_fishnet_static
+table_description: 浙江省渔1km*1km分辨率网格点静态环境特征表（包含数字高程模型、海拔、高度、坡度、坡向、ESA土地利用与土地覆盖分类、地表类型等不随时间变化的静态特征变量）
+domain: 浙江
+semantic_aliases:
+  elevation:
+    terms: [海拔, 高程, 海拔高程, DEM, elevation]
+    columns: [dem]
+  slope:
+    terms: [坡度, 平均坡度, slope]
+    columns: [slope]
+  landcover_esa:
+    terms: [ESA土地覆盖, ESA土地覆盖类型, ESA地表覆盖, landcover ESA]
+    columns: [landcover_esa]
+spatiotemporal_properties:
+  spatial_granularity: 渔网
+  temporal_granularity: 静态
+  has_geometry: false
+columns:
+- name: cell_id
+  type: BIGINT
+  description: 渔网格网单元唯一标识，与 GeoJSON 中要素一一对应
+  is_primary_key: true
+  foreign_key: zhejiang_fishnet.cell_id
+- name: dem
+  type: DOUBLE PRECISION
+  description: 海拔高程
+- name: slope
+  type: DOUBLE PRECISION
+  description: 坡度
+- name: aspect
+  type: DOUBLE PRECISION
+  description: 坡向
+- name: landcover_esa
+  type: TEXT
+  description: ESA土地覆盖分类
+  enums:
+  - Tree cover
+  - Grassland
+  - Cropland
+  - Built-up
+  - Bare sparse vegetation
+  - Permanent water bodies

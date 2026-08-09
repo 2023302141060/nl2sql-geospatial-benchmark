@@ -1,0 +1,107 @@
+table_name: zhejiang_fishnet_dynamic
+table_description: 浙江省1km*1km分辨率渔网格动态时序数据表（包含2012，2017，2022年的降水量、气温、人口、夜间灯光、植被指数等动态时空指标，可用于查询各网格每年的环境和气象数据）
+domain: 浙江
+semantic_aliases:
+  precipitation:
+    terms: [降水量, 年降水量, 平均降水量, precipitation]
+    columns: [precipitation]
+  temperature:
+    terms: [气温, 年平均气温, 平均气温, temperature]
+    columns: [temperature]
+  ndvi:
+    terms: [NDVI, 归一化植被指数]
+    columns: [ndvi]
+  population:
+    terms: [人口, 常住人口, 人口总数, population]
+    columns: [population]
+  nightlight:
+    terms: [夜间灯光, 夜间灯光强度, 夜光, nightlight]
+    columns: [nightlight]
+  landcover_igbp:
+    terms: [土地覆盖类型, IGBP土地覆盖, IGBP土地覆盖类型, landcover IGBP]
+    columns: [landcover_igbp]
+spatiotemporal_properties:
+  spatial_granularity: 渔网
+  temporal_granularity: 年度
+  has_geometry: false
+columns:
+- name: cell_id
+  type: BIGINT
+  description: 渔网格网单元唯一标识，与 GeoJSON 中要素一一对应
+  is_primary_key: true
+  foreign_key: zhejiang_fishnet.cell_id
+- name: year
+  type: BIGINT
+  description: 年份
+  is_primary_key: true
+  is_temporal_column: true
+  enums:
+  - '2012'
+  - '2022'
+  - '2017'
+- name: precipitation
+  type: DOUBLE PRECISION
+  description: 年降水量
+- name: temperature
+  type: DOUBLE PRECISION
+  description: 年平均气温
+- name: evapotranspiration
+  type: DOUBLE PRECISION
+  description: 年蒸散量
+- name: soil_moisture
+  type: DOUBLE PRECISION
+  description: 年平均土壤湿度
+- name: ndvi
+  type: DOUBLE PRECISION
+  description: 归一化植被指数
+- name: evi
+  type: DOUBLE PRECISION
+  description: 增强型植被指数
+- name: lai
+  type: DOUBLE PRECISION
+  description: 叶面积指数
+- name: population
+  type: BIGINT
+  description: 格网内估算常住人口总数
+- name: nightlight
+  type: DOUBLE PRECISION
+  description: 夜间灯光强度（年度中值）
+- name: era5_temp
+  type: DOUBLE PRECISION
+  description: ERA5-Land 年均 2 m 气温
+- name: era5_precip
+  type: DOUBLE PRECISION
+  description: ERA5-Land 年降水总量
+- name: landcover_igbp
+  type: TEXT
+  description: IGBP 土地覆盖类型
+  enums:
+  - Evergreen Needleleaf Forests
+  - Evergreen Broadleaf Forests
+  - Deciduous Broadleaf Forests
+  - Mixed Forests
+  - Woody Savannas
+  - Savannas
+  - Grasslands
+  - Permanent Wetlands
+  - Croplands
+  - Urban and Built-up Lands
+  - Cropland Natural Vegetation Mosaics
+  - Barren
+  - Water Bodies
+- name: landcover_dw
+  type: TEXT
+  description: Dynamic World土地覆盖类型
+  enums:
+  - Water
+  - Trees
+  - Grass
+  - Flooded Vegetation
+  - Crops
+  - Shrub and Scrub
+  - Built
+  - Bare
+  - Snow and Ice
+- name: built_surface
+  type: DOUBLE PRECISION
+  description: 格网内建成区面积

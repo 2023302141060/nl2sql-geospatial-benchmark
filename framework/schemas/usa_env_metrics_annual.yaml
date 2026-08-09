@@ -1,0 +1,52 @@
+table_name: usa_env_metrics_annual
+table_description: 美国2010-2015年年度环境指标数据表（包含气温、温度、植被指数NDVI、PM2.5空气质量、人口总量、降水量、下雨量等年度统计特征数据）
+domain: 美国
+spatiotemporal_properties:
+  spatial_granularity: 区域面要素
+  temporal_granularity: 年度
+  has_geometry: false
+columns:
+- name: asdf_id
+  type: BIGINT
+  description: 空间单元唯一标识
+  is_primary_key: true
+  foreign_key: usa_spatial_base.asdf_id
+- name: year
+  type: BIGINT
+  description: 年份
+  is_primary_key: true
+  is_temporal_column: true
+  enums:
+  - '2013'
+  - '2015'
+  - '2012'
+  - '2011'
+  - '2014'
+  - '2010'
+- name: air_temp_mean
+  type: DOUBLE PRECISION
+  description: 年平均气温
+  aliases: [气温, 平均气温, 年平均气温, air temperature]
+- name: lst_day_mean
+  type: DOUBLE PRECISION
+  description: 年平均日间地表温度
+- name: lst_night_mean
+  type: DOUBLE PRECISION
+  description: 年平均夜间地表温度
+- name: ndvi_mean
+  type: DOUBLE PRECISION
+  description: 平均归一化植被指数
+- name: pm25_mean
+  type: DOUBLE PRECISION
+  description: 平均PM2.5浓度
+  aliases: [PM2.5, PM25, 细颗粒物浓度, 平均PM2.5]
+- name: pop_sum
+  type: DOUBLE PRECISION
+  description: 人口总数
+  aliases: [人口, 总人口, 人口总数, population]
+- name: precip_mean
+  type: DOUBLE PRECISION
+  description: 平均降水量
+- name: precip_sum
+  type: DOUBLE PRECISION
+  description: 总降水量

@@ -1,0 +1,61 @@
+table_name: usa_landcover_annual_proportion
+table_description: 美国2010-2012年年度土地覆盖各分类面积占比统计表（土地利用、地表覆盖、土地类型比例、植被覆盖占比、landcover、地类份额）
+domain: 美国
+semantic_aliases:
+  cropland_proportion:
+    terms: [农用地占比, 农用地面积占比, 农用地比例, 耕地占比, 耕地面积占比, cropland proportion]
+    columns: [category, proportion]
+  urban_builtup_proportion:
+    terms: [城市建设用地占比, 建设用地占比, 城市用地占比, urban built-up proportion]
+    columns: [category, proportion]
+  landcover_proportion:
+    terms: [土地覆盖占比, 土地利用占比, 地类占比, 土地覆盖比例, landcover proportion]
+    columns: [category, proportion]
+spatiotemporal_properties:
+  spatial_granularity: 空间实体单元
+  temporal_granularity: 年度
+  has_geometry: false
+columns:
+- name: asdf_id
+  type: BIGINT
+  description: 空间单元唯一标识
+  is_primary_key: true
+  foreign_key: usa_spatial_base.asdf_id
+- name: year
+  type: BIGINT
+  description: 年份
+  is_primary_key: true
+  is_temporal_column: true
+  enums:
+  - '2011'
+  - '2012'
+  - '2010'
+- name: category
+  type: TEXT
+  description: 土地覆盖类型
+  aliases: [地类, 土地类型, 土地覆盖类别, landcover category]
+  is_primary_key: true
+  enums:
+  - savannas
+  - permanent_wetlands
+  - closed_shrublands
+  - deciduous_broadleaf_forest
+  - croplands
+  - evergreen_broadleaf_forest
+  - woody_savannas
+  - mixed_forest
+  - grasslands
+  - deciduous_needleleaf_forest
+  - snow_and_ice
+  - urban_and_builtup
+  - cropland_natural_vegetation_mosaic
+  - fill_value
+  - barren_or_sparsely_vegetated
+  - evergreen_needleleaf_forest
+  - water
+  - open_shrublands
+  - unclassified
+- name: proportion
+  type: DOUBLE PRECISION
+  description: 该土地分类在对应空间单元中的面积占比，以0到1的小数存储；用户使用百分数阈值时须除以100后再比较
+  aliases: [面积占比, 占比, 比例, proportion]

@@ -1,0 +1,122 @@
+table_name: usa_static
+table_description: 美国静态环境变量数据表（包含太阳能光伏发电潜力、风速、地形坡度、数字高程模型DEM、陆上石油潜力等自然环境指标，以及行政区划层级、省/州名称、ID等基础信息）
+domain: 美国
+spatiotemporal_properties:
+  spatial_granularity: 州级面要素
+  temporal_granularity: 静态
+  has_geometry: false
+columns:
+- name: asdf_id
+  type: BIGINT
+  description: 空间单元唯一标识
+  is_primary_key: true
+  foreign_key: usa_spatial_base.asdf_id
+- name: pvout_mean
+  type: DOUBLE PRECISION
+  description: 光伏发电潜力/日照输出均值
+  aliases: [光伏潜力, 光伏发电潜力, 太阳能潜力, photovoltaic potential]
+- name: windspeed_mean
+  type: DOUBLE PRECISION
+  description: 平均风速
+  aliases: [平均风速, 风速, wind speed, mean wind speed]
+- name: slope_mean
+  type: DOUBLE PRECISION
+  description: 平均坡度
+- name: elevation_mean
+  type: DOUBLE PRECISION
+  description: 平均海拔高度
+  aliases: [平均海拔, 海拔, 平均高程, mean elevation]
+- name: onshore_petroleum_mean
+  type: DOUBLE PRECISION
+  description: 行政区内“存在陆上油气储藏”的面积比例
+  aliases: [陆上油气储藏面积比例, 油气储藏面积比例, 陆上油气储藏比例, onshore petroleum area proportion]
+- name: Level
+  type: TEXT
+  description: 行政区划级别
+  enums:
+  - ADM1
+- name: gqid
+  type: BIGINT
+  description: GeoQuery 内部几何/区域 ID
+- name: shapeGroup
+  type: TEXT
+  description: 几何所属组（如 USA）
+  enums:
+  - USA
+- name: shapeID
+  type: TEXT
+  description: 行政区划唯一字符串ID
+  enums:
+  - USA-ADM1-74948055B85483590
+  - USA-ADM1-74948055B41389537
+  - USA-ADM1-74948055B6575368
+  - USA-ADM1-74948055B37664100
+  - USA-ADM1-74948055B14744715
+  - USA-ADM1-74948055B41073925
+  - USA-ADM1-74948055B70082041
+  - USA-ADM1-74948055B28814492
+  - USA-ADM1-74948055B97133507
+  - USA-ADM1-74948055B77741322
+  - USA-ADM1-74948055B62440957
+  - USA-ADM1-74948055B52143666
+  - USA-ADM1-74948055B2468970
+  - USA-ADM1-74948055B70113359
+  - USA-ADM1-74948055B65891110
+  - USA-ADM1-74948055B37863122
+  - USA-ADM1-74948055B53145542
+  - USA-ADM1-74948055B48828815
+  - USA-ADM1-74948055B74402571
+  - USA-ADM1-74948055B37456580
+- name: shapeISO
+  type: TEXT
+  description: 行政区划ISO编码（州缩写代码，如US-MO）
+  enums:
+  - US-MO
+  - US-WV
+  - US-GU
+  - US-MT
+  - US-PA
+  - US-ID
+  - US-AL
+  - US-IL
+  - US-FL
+  - US-NV
+  - US-VI
+  - US-NE
+  - US-CA
+  - US-OH
+  - US-VT
+  - US-VA
+  - US-MP
+  - US-WA
+  - US-UT
+  - US-LA
+- name: shapeName
+  type: TEXT
+  description: 行政区划名称
+  enums:
+  - Oklahoma
+  - Colorado
+  - North Carolina
+  - Mississippi
+  - Florida
+  - Delaware
+  - Vermont
+  - Nevada
+  - Louisiana
+  - New York
+  - Guam
+  - West Virginia
+  - South Carolina
+  - New Jersey
+  - Arkansas
+  - Hawaii
+  - New Mexico
+  - Missouri
+  - Connecticut
+  - South Dakota
+- name: shapeType
+  type: TEXT
+  description: 要素几何类型分类
+  enums:
+  - ADM1

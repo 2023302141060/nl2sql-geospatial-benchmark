@@ -1,0 +1,101 @@
+table_name: usa_spatial_base
+table_description: 美国空间基础信息表（包含州级行政区划边界、基础地理要素、矢量面数据、地图多边形、区域名称与编码）
+domain: 美国
+spatiotemporal_properties:
+  spatial_granularity: 州级面要素
+  temporal_granularity: 静态
+  has_geometry: true
+columns:
+- name: Level
+  type: TEXT
+  description: 行政级别
+  enums:
+  - ADM1
+- name: asdf_id
+  type: INTEGER
+  description: 空间单元唯一标识
+  is_primary_key: true
+- name: gqid
+  type: INTEGER
+  description: GeoQuery 几何 ID
+- name: shapeGroup
+  type: TEXT
+  description: 所属国家组别
+  enums:
+  - USA
+- name: shapeID
+  type: TEXT
+  description: 图形要素唯一标识
+  enums:
+  - USA-ADM1-74948055B85483590
+  - USA-ADM1-74948055B41389537
+  - USA-ADM1-74948055B6575368
+  - USA-ADM1-74948055B37664100
+  - USA-ADM1-74948055B14744715
+  - USA-ADM1-74948055B41073925
+  - USA-ADM1-74948055B70082041
+  - USA-ADM1-74948055B28814492
+  - USA-ADM1-74948055B97133507
+  - USA-ADM1-74948055B77741322
+  - USA-ADM1-74948055B62440957
+  - USA-ADM1-74948055B52143666
+  - USA-ADM1-74948055B2468970
+  - USA-ADM1-74948055B70113359
+  - USA-ADM1-74948055B65891110
+  - USA-ADM1-74948055B37863122
+  - USA-ADM1-74948055B53145542
+  - USA-ADM1-74948055B48828815
+  - USA-ADM1-74948055B74402571
+  - USA-ADM1-74948055B37456580
+- name: shapeISO
+  type: TEXT
+  description: ISO 行政区代码
+  enums:
+  - US-MO
+  - US-WV
+  - US-GU
+  - US-MT
+  - US-PA
+  - US-ID
+  - US-AL
+  - US-IL
+  - US-FL
+  - US-NV
+  - US-VI
+  - US-NE
+  - US-CA
+  - US-OH
+  - US-VT
+  - US-VA
+  - US-MP
+  - US-WA
+  - US-UT
+  - US-LA
+- name: shapeName
+  type: TEXT
+  description: 行政区划名称
+  enums:
+  - Oklahoma
+  - Colorado
+  - North Carolina
+  - Mississippi
+  - Florida
+  - Delaware
+  - Vermont
+  - Nevada
+  - Louisiana
+  - New York
+  - Guam
+  - West Virginia
+  - South Carolina
+  - New Jersey
+  - Arkansas
+  - Hawaii
+  - New Mexico
+  - Missouri
+  - Connecticut
+  - South Dakota
+- name: geometry
+  type: geometry(GEOMETRY)
+  description: 空间几何信息（Polygon）
+  is_spatial_column: true

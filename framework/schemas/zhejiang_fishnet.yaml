@@ -1,0 +1,19 @@
+table_name: zhejiang_fishnet
+table_description: 浙江省1km*1km分辨率渔网空间基础表（包含渔网、格网、网格面要素、格子、鱼网边界面数据），作为后续各类栅格和格网时空数据的空间基底载体，用于定义全省标准的空间单元。
+domain: 浙江
+spatiotemporal_properties:
+  spatial_granularity: 渔网
+  temporal_granularity: 静态
+  has_geometry: true
+columns:
+- name: area_ratio
+  type: DOUBLE PRECISION
+  description: 网格在省界内的实际有效面积比，通常用于计算边界处跨界网格的实际隶属面积
+- name: cell_id
+  type: INTEGER
+  description: 渔网格网单元唯一标识，与 GeoJSON 中要素一一对应
+  is_primary_key: true
+- name: geometry
+  type: geometry(POLYGON)
+  description: 空间几何多边形（Polygon）
+  is_spatial_column: true

@@ -1,0 +1,104 @@
+================================================================================
+Geo-Schema 四维描述法：面向时空地理数据 Text2SQL 的核心设计策略
+================================================================================
+
+本文档说明 Geo-Schema YAML 配置文件的核心设计理念——「四维描述法」。该设计旨在
+让大模型（LLM）与 RAG 检索系统能够准确理解数据库结构，从而生成正确的 SQL 查询。
+
+
+一、设计目标
+--------------------------------------------------------------------------------
+在面向时空地理数据（GIS）的 Text2SQL Agent 系统中，数据库表往往具有：
+- 多区域、多粒度（美国州级、浙江渔网、武汉大学校园等）
+- 时序与静态混合（年度、月度、静态）
+- 复杂的空间几何与属性关联（asdf_id、cell_id 等外键）
+
+若仅依赖原始 DDL 或简单表名，大模型难以理解业务语义，易产生错误 JOIN 或遗漏
+时空过滤条件。四维描述法通过结构化、语义化的 YAML 描述，补齐这一短板。
+
+
+二、四维描述法详解
+--------------------------------------------------------------------------------
+
+【第一维】全局画像 (Table Metadata)
+--------------------------------------
+- 内容：表名、业务含义（table_description）、所属区域（domain）
+- 作用：这是 RAG 向量检索（第一阶段）最依赖的文本。当用户提问「美国各州人口」
+        时，检索系统通过 table_description 和 domain 匹配到 usa_env_metrics_annual、
+        usa_spatial_base 等表，而非浙江或武汉大学的数据表。
+- 在 YAML 中的对应字段：
+  - table_name
+  - table_description
+  - domain
+
+
+【第二维】时空锚点 (Spatiotemporal Tags)
+--------------------------------------
+- 内容：时间颗粒度（temporal_granularity）、空间颗粒度（spatial_granularity）、
+        是否包含几何列（has_geometry）
+- 作用：明确告诉大模型，这张表的「时间颗粒度」和「空间颗粒度」是什么——极其关键！
+        例如：
+        - 年度表：year 字段，可做「2020 年 vs 2022 年」对比
+        - 月度表：year + month，可做「2020 年 3 月」的细粒度查询
+        - 静态表：无时间维度，仅做空间筛选
+        - 州级：按州聚合；渔网：按格网单元；点位：Point 几何
+- 在 YAML 中的对应字段：
+  - spatiotemporal_properties.spatial_granularity
+  - spatiotemporal_properties.temporal_granularity
+  - spatiotemporal_properties.has_geometry
+
+
+【第三维】字段语义 (Column Semantics)
+--------------------------------------
+- 内容：不仅要有字段名和类型，必须要有中文释义（description）、枚举值/采样值（enums）
+- 作用：让大模型理解每个字段的「业务含义」，而非仅看到 asdf_id、cell_id 等技术命名。
+        对于类别字段（如 landcover category、shapeType），enums 提供完整取值列表，
+        避免大模型猜测或遗漏。
+- 在 YAML 中的对应字段：
+  - columns[].name
+  - columns[].type
+  - columns[].description
+  - columns[].enums（由 sample_values 经 LLM 推断生成）
+
+
+【第四维】拓扑血缘 (Relational Links)
+--------------------------------------
+- 内容：主键（is_primary_key）、外键（foreign_key）、联合主键（多字段 is_primary_key）
+- 作用：指导大模型如何做 JOIN。例如：
+        - asdf_id → usa_spatial_base.asdf_id：指标表与空间边界表通过 asdf_id 关联
+        - cell_id → zhejiang_fishnet.cell_id：动态/静态表与渔网几何表通过 cell_id 关联
+        若缺少拓扑血缘，大模型可能错误地 JOIN 不同区域的表，或遗漏必要的空间关联。
+- 在 YAML 中的对应字段：
+  - columns[].is_primary_key
+  - columns[].foreign_key（格式：目标表.目标列，或 null）
+
+
+三、四维与 Geo-Schema 生成脚本的对应关系
+--------------------------------------------------------------------------------
+generate_mschema.py 脚本通过以下逻辑实现四维描述：
+
+| 维度         | 实现方式 |
+|--------------|----------|
+| 全局画像     | LLM 根据表名、样本数据推断 table_description、domain |
+| 时空锚点     | LLM 根据 year/month 字段、geometry 列推断 spatiotemporal_properties |
+| 字段语义     | 脚本提供 DISTINCT 采样的 sample_values，LLM 生成 description 与 enums |
+| 拓扑血缘     | 脚本提供全局表目录，LLM 推断 foreign_key；联合主键由 Prompt 约束 |
+
+全局表目录（Global Schema Catalog）的注入，是拓扑血缘准确性的关键：单表视角下
+无法推断外键，必须让 LLM 看到「数据库中有哪些表、每张表有哪些列」，才能正确
+填写 foreign_key。
+
+
+四、总结
+--------------------------------------------------------------------------------
+四维描述法将 Geo-Schema 从「表结构快照」提升为「业务语义 + 时空语义 + 拓扑关系」
+的完整画像，使 Text2SQL Agent 能够：
+1. 正确检索相关表（全局画像）
+2. 正确应用时间/空间过滤（时空锚点）
+3. 正确理解字段含义与取值（字段语义）
+4. 正确构建多表 JOIN（拓扑血缘）
+
+================================================================================
+文档版本：1.0
+生成脚本：generate_mschema.py
+================================================================================

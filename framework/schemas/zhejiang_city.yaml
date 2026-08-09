@@ -1,0 +1,43 @@
+table_name: zhejiang_city
+table_description: 浙江省市级行政区划基础表（包含地级市、城市边界、行政区边界、市级空间底图等信息）
+domain: 浙江
+spatiotemporal_properties:
+  spatial_granularity: 市级
+  temporal_granularity: 静态
+  has_geometry: true
+columns:
+- name: fullname
+  type: TEXT
+  description: 城市全称
+  enums:
+  - 绍兴市
+  - 台州市
+  - 嘉兴市
+  - 杭州市
+  - 温州市
+  - 丽水市
+  - 金华市
+  - 宁波市
+  - 舟山市
+  - 衢州市
+  - 湖州市
+- name: code
+  type: TEXT
+  description: 城市行政区划代码
+  is_primary_key: true
+  enums:
+  - '330900'
+  - '331000'
+  - '330600'
+  - '330200'
+  - '330300'
+  - '330700'
+  - '330100'
+  - '330500'
+  - '331100'
+  - '330800'
+  - '330400'
+- name: geometry
+  type: geometry(GEOMETRY)
+  description: 城市空间几何图形（Polygon）
+  is_spatial_column: true
